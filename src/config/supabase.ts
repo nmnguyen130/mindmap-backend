@@ -5,9 +5,12 @@ export const supabaseAdmin = createClient(env.supabaseUrl, env.supabaseServiceRo
   auth: { persistSession: false, autoRefreshToken: false },
 })
 
-export const supabaseAnon = createClient(env.supabaseUrl, env.supabaseAnonKey, {
+export const supabase = createClient(env.supabaseUrl, env.supabaseAnonKey, {
   auth: { persistSession: false, autoRefreshToken: false },
 })
+
+// Backward compatibility
+export const supabaseAnon = supabase
 
 export function createUserSupabaseClient(jwt: string) {
   return createClient(env.supabaseUrl, env.supabaseAnonKey, {

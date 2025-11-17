@@ -1,4 +1,4 @@
-import { env } from '../../config/env'
+import { env } from '@/config/env'
 
 async function callEdge(path: string, body: unknown, token?: string) {
   const url = `${env.supabaseUrl}/functions/v1/${path}`

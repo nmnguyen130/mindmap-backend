@@ -1,11 +1,11 @@
 import express from 'express'
 import helmet from 'helmet'
 import cors from 'cors'
-import { apiRateLimit } from './api/middlewares/rateLimit'
-import api from './api/routes'
-import { errorHandler } from './api/middlewares/error'
-import { env, assertEnv } from './config/env'
-import { logger } from './utils/logger'
+import { apiRateLimit } from '@/core/middlewares/rateLimit'
+import api from '@/modules'
+import { errorHandler } from '@/core/middlewares/error'
+import { env, assertEnv } from '@/config/env'
+import { logger } from '@/core/utils/logger'
 import path from 'node:path'
 
 assertEnv()
@@ -20,7 +20,7 @@ app.use(apiRateLimit)
 
 // OpenAPI docs JSON
 app.get('/api/docs/openapi.json', (_req, res) => {
-  res.sendFile(path.join(process.cwd(), 'src', 'api', 'docs', 'openapi.json'))
+  res.sendFile(path.join(process.cwd(), 'docs', 'openapi.json'))
 })
 
 // Routes
