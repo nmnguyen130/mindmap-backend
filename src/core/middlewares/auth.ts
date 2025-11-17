@@ -3,6 +3,12 @@ import { supabase, createUserSupabaseClient } from '@/config/supabase'
 import { UnauthorizedError } from '@/core/utils/errors'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
+export function extractBearerToken(req: Request): string | undefined {
+  const auth = req.headers.authorization
+  if (!auth?.startsWith('Bearer ')) return undefined
+  return auth.split(' ')[1]
+}
+
 export interface AuthedRequest extends Request {
   user?: { id: string; email?: string }
   supabase?: SupabaseClient

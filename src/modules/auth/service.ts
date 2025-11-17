@@ -1,11 +1,19 @@
 import { supabase, supabaseAdmin } from '@/config/supabase'
 import { UnauthorizedError, BadRequestError } from '@/core/utils/errors'
+import type { User } from '@supabase/supabase-js'
+import type { AuthUser } from '@/shared/types'
 
-export async function register(email: string, password: string, metadata?: { name?: string }) {
+function createUserResponse(user: User): AuthUser {
+  return {
+    id: user.id,
+    email: user.email!,
+  }
+}
+
+export async function register(email: string, password: string) {
   const { data, error } = await supabaseAdmin.auth.admin.createUser({
     email,
     password,
-    user_metadata: metadata,
     email_confirm: true,
   })
 
@@ -28,12 +36,10 @@ export async function register(email: string, password: string, metadata?: { nam
   }
 
   return {
-    user: {
-      id: data.user.id,
-      email: data.user.email,
-      ...data.user.user_metadata,
-    },
-    session: sessionData.session,
+    user: createUserResponse(data.user),
+    accessToken: sessionData.session.access_token,
+    refreshToken: sessionData.session.refresh_token,
+    expiresAt: sessionData.session.expires_at,
   }
 }
 
@@ -49,12 +55,10 @@ export async function login(email: string, password: string) {
   }
 
   return {
-    user: {
-      id: data.user.id,
-      email: data.user.email,
-      ...data.user.user_metadata,
-    },
-    session: data.session,
+    user: createUserResponse(data.user),
+    accessToken: data.session.access_token,
+    refreshToken: data.session.refresh_token,
+    expiresAt: data.session.expires_at,
   }
 }
 
@@ -74,12 +78,10 @@ export async function refresh(refreshToken: string) {
   }
 
   return {
-    user: data.user ? {
-      id: data.user.id,
-      email: data.user.email,
-      ...data.user.user_metadata,
-    } : null,
-    session: data.session,
+    user: data.user ? createUserResponse(data.user) : null,
+    accessToken: data.session.access_token,
+    refreshToken: data.session.refresh_token,
+    expiresAt: data.session.expires_at,
   }
 }
 
@@ -109,7 +111,6 @@ export async function getProfile(userId: string) {
   return {
     id: data.user.id,
     email: data.user.email,
-    ...data.user.user_metadata,
     emailVerified: data.user.email_confirmed_at !== null,
     createdAt: data.user.created_at,
   }

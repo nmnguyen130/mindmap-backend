@@ -1,24 +1,22 @@
 import { z } from 'zod'
 
 export const registerSchema = z.object({
-  email: z.string().email('Invalid email format').min(1, 'Email is required'),
+  email: z.email().min(1, {message: 'Email is required'}),
   password: z
     .string()
-    .min(8, 'Password must be at least 8 characters')
-    .max(128, 'Password must not exceed 128 characters')
-    .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
-    .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
-    .regex(/[0-9]/, 'Password must contain at least one number'),
-  name: z.string().min(2, 'Name must be at least 2 characters').optional(),
+    .min(8, {message: 'Password must be at least 8 characters'})
+    .max(128, {message: 'Password must not exceed 128 characters'})
+    .refine(val => /[a-z]/.test(val), {message: 'Password must contain at least one lowercase letter'})
+    .refine(val => /[0-9]/.test(val), {message: 'Password must contain at least one number'}),
 })
 
 export const loginSchema = z.object({
-  email: z.string().email('Invalid email format').min(1, 'Email is required'),
-  password: z.string().min(1, 'Password is required'),
+  email: z.email().min(1, {message: 'Email is required'}),
+  password: z.string().min(1, {message: 'Password is required'}),
 })
 
 export const refreshTokenSchema = z.object({
-  refreshToken: z.string().min(1, 'Refresh token is required'),
+  refreshToken: z.string().min(1, {message: 'Refresh token is required'}),
 })
 
 export const logoutSchema = z.object({

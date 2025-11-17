@@ -1,28 +1,30 @@
-### Auth - Register
+### 1. Auth - Register
 POST http://localhost:4000/api/auth/register
 Content-Type: application/json
 
 {
   "email": "test@gmail.com",
-  "password": "Password123"
+  "password": "password123"
 }
 
-### Auth - Login
+### 2. Auth - Login
+# @name login
 POST http://localhost:4000/api/auth/login
 Content-Type: application/json
 
 {
   "email": "test@gmail.com",
-  "password": "Password123"
+  "password": "password123"
 }
 
-@access_token = {{.$response.body.session.access_token}}
+### Get access token
+@access_token = {{login.response.body.data.accessToken}}
 
-### Me
+### 3. Me
 GET http://localhost:4000/api/auth/me
 Authorization: Bearer {{access_token}}
 
-### Create MindMap
+### 4. Create MindMap
 POST http://localhost:4000/api/mindmaps
 Authorization: Bearer {{access_token}}
 Content-Type: application/json
@@ -34,15 +36,15 @@ Content-Type: application/json
   ]
 }
 
-### List MindMaps
+### 5. List MindMaps
 GET http://localhost:4000/api/mindmaps
 Authorization: Bearer {{access_token}}
 
-### Get MindMap
+### 6. Get MindMap
 GET http://localhost:4000/api/mindmaps/{{mindmap_id}}
 Authorization: Bearer {{access_token}}
 
-### Update MindMap (optimistic)
+### 7. Update MindMap (optimistic)
 PUT http://localhost:4000/api/mindmaps/{{mindmap_id}}
 Authorization: Bearer {{access_token}}
 Content-Type: application/json
@@ -52,15 +54,15 @@ Content-Type: application/json
   "version": {{version}}
 }
 
-### Delete MindMap
+### 8. Delete MindMap
 DELETE http://localhost:4000/api/mindmaps/{{mindmap_id}}
 Authorization: Bearer {{access_token}}
 
-### Nodes - List
+### 9. Nodes - List
 GET http://localhost:4000/api/mindmaps/{{mindmap_id}}/nodes
 Authorization: Bearer {{access_token}}
 
-### Nodes - Add
+### 10. Nodes - Add
 POST http://localhost:4000/api/mindmaps/{{mindmap_id}}/nodes
 Authorization: Bearer {{access_token}}
 Content-Type: application/json
@@ -72,7 +74,7 @@ Content-Type: application/json
   "connections": ["node1"]
 }
 
-### Nodes - Update
+### 11. Nodes - Update
 PUT http://localhost:4000/api/nodes/{{node_id}}
 Authorization: Bearer {{access_token}}
 Content-Type: application/json
@@ -81,21 +83,21 @@ Content-Type: application/json
   "text": "Updated"
 }
 
-### Nodes - Delete
+### 12. Nodes - Delete
 DELETE http://localhost:4000/api/nodes/{{node_id}}
 Authorization: Bearer {{access_token}}
 
-### Files - Upload PDF
+### 13. Files - Upload PDF
 POST http://localhost:4000/api/files/upload
 Authorization: Bearer {{access_token}}
 Content-Type: multipart/form-data
 
 file=@./sample.pdf
 
-### Files - List
+### 14. Files - List
 GET http://localhost:4000/api/files
 Authorization: Bearer {{access_token}}
 
-### Files - Delete
+### 15. Files - Delete
 DELETE http://localhost:4000/api/files/{{storage_path}}
 Authorization: Bearer {{access_token}}

@@ -1,13 +1,13 @@
 import { Request, Response, NextFunction } from 'express'
 import { ApiResponseHelper } from '@/core/utils/response'
-import { AuthedRequest } from '@/core/middlewares/auth'
+import { AuthedRequest, extractBearerToken } from '@/core/middlewares/auth'
 import * as authService from '@/modules/auth/service'
 import type { RegisterInput, LoginInput, RefreshTokenInput } from '@/modules/auth/validator'
 
 export async function register(req: Request<{}, {}, RegisterInput>, res: Response, next: NextFunction) {
   try {
-    const { email, password, name } = req.body
-    const data = await authService.register(email, password, name ? { name } : undefined)
+    const { email, password } = req.body
+    const data = await authService.register(email, password)
     return ApiResponseHelper.created(res, data)
   } catch (error) {
     next(error)
@@ -49,8 +49,7 @@ export async function me(req: AuthedRequest, res: Response, next: NextFunction) 
 
 export async function logout(req: AuthedRequest, res: Response, next: NextFunction) {
   try {
-    const auth = req.headers.authorization
-    const token = auth?.split(' ')[1]
+    const token = extractBearerToken(req)
 
     if (!token) {
       return ApiResponseHelper.unauthorized(res, 'No token provided')
