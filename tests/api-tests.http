@@ -1,0 +1,99 @@
+### Auth - Register
+POST http://localhost:4000/api/auth/register
+Content-Type: application/json
+
+{
+  "email": "nmnguyen130@gmail.com",
+  "password": "password123"
+}
+
+### Auth - Login
+POST http://localhost:4000/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@gmail.com",
+  "password": "password123"
+}
+
+### Me
+GET http://localhost:4000/api/auth/me
+Authorization: Bearer {{access_token}}
+
+### Create MindMap
+POST http://localhost:4000/api/mindmaps
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "title": "Project Plan",
+  "nodes": [
+    { "id": "node1", "text": "Main Topic", "position": { "x": 0, "y": 0 }, "connections": [] }
+  ]
+}
+
+### List MindMaps
+GET http://localhost:4000/api/mindmaps
+Authorization: Bearer {{access_token}}
+
+### Get MindMap
+GET http://localhost:4000/api/mindmaps/{{mindmap_id}}
+Authorization: Bearer {{access_token}}
+
+### Update MindMap (optimistic)
+PUT http://localhost:4000/api/mindmaps/{{mindmap_id}}
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "title": "Project Plan v2",
+  "version": {{version}}
+}
+
+### Delete MindMap
+DELETE http://localhost:4000/api/mindmaps/{{mindmap_id}}
+Authorization: Bearer {{access_token}}
+
+### Nodes - List
+GET http://localhost:4000/api/mindmaps/{{mindmap_id}}/nodes
+Authorization: Bearer {{access_token}}
+
+### Nodes - Add
+POST http://localhost:4000/api/mindmaps/{{mindmap_id}}/nodes
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "id": "node2",
+  "text": "Child",
+  "position": { "x": 10, "y": 10 },
+  "connections": ["node1"]
+}
+
+### Nodes - Update
+PUT http://localhost:4000/api/nodes/{{node_id}}
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "text": "Updated"
+}
+
+### Nodes - Delete
+DELETE http://localhost:4000/api/nodes/{{node_id}}
+Authorization: Bearer {{access_token}}
+
+### Files - Upload PDF
+POST http://localhost:4000/api/files/upload
+Authorization: Bearer {{access_token}}
+Content-Type: multipart/form-data
+
+file=@./sample.pdf
+
+### Files - List
+GET http://localhost:4000/api/files
+Authorization: Bearer {{access_token}}
+
+### Files - Delete
+DELETE http://localhost:4000/api/files/{{storage_path}}
+Authorization: Bearer {{access_token}}
