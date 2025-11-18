@@ -4,7 +4,7 @@
 node_modules/
 dist/
 docs/
-
+Building_Efficient_SLM.pdf
 
 # debug
 npm-debug.*

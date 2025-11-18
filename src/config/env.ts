@@ -11,6 +11,7 @@ export const env = {
   supabaseDbSchema: process.env.SUPABASE_DB_SCHEMA || 'public',
   supabaseStorageBucket: process.env.SUPABASE_STORAGE_BUCKET || 'files',
   corsOrigin: process.env.CORS_ORIGIN || '*',
+  openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
 }
 
 export function assertEnv() {

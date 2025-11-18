@@ -1,0 +1,111 @@
+### AI Testing Examples
+### 2. Auth - Login
+# @name login
+POST http://localhost:4000/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@gmail.com",
+  "password": "password123"
+}
+
+### Get access token
+@access_token = {{login.response.body.data.accessToken}}
+
+### Generate Mindmap from Text
+POST http://localhost:4000/api/ai/generate
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "text": "Create a mindmap about sustainable development goals including climate action, zero hunger, and quality education."
+}
+
+### Upload PDF file (required before AI processing)
+POST http://localhost:4000/api/files/upload
+Authorization: Bearer {{access_token}}
+Content-Type: multipart/form-data
+
+file=@Building_Efficient_SLM.pdf
+
+### Process PDF for RAG (this prepares chunks for AI questions)
+# Copy fileId from upload response above
+@pdf_file_id = 12345678-1234-1234-1234-123456789012
+
+POST http://localhost:4000/api/ai/generate
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "fileId": "{{pdf_file_id}}"
+}
+
+### Generate Mindmap from PDF (RAG-enabled)
+POST http://localhost:4000/api/ai/generate
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "fileId": "{{pdf_file_id}}"
+}
+
+### Get AI Suggestions for Mindmap
+POST http://localhost:4000/api/ai/suggest
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "mindMapId": "{{mindmap_id}}",
+  "nodes": [
+    { "id": "node1", "text": "Technology", "position": { "x": 0, "y": 0 }, "connections": [] },
+    { "id": "node2", "text": "AI", "position": { "x": 100, "y": 0 }, "connections": ["node1"] }
+  ]
+}
+
+### Summarize Mindmap
+POST http://localhost:4000/api/ai/summarize
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "mindMapId": "{{mindmap_id}}",
+  "nodes": [
+    { "id": "node1", "text": "Project", "position": { "x": 0, "y": 0 }, "connections": [] },
+    { "id": "node2", "text": "Planning", "position": { "x": 100, "y": 50 }, "connections": ["node1"] },
+    { "id": "node3", "text": "Execution", "position": { "x": 100, "y": -50 }, "connections": ["node1"] }
+  ]
+}
+
+### Chat with AI about Mindmap
+POST http://localhost:4000/api/ai/chat
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "mindMapId": "{{mindmap_id}}",
+  "message": "What are the key challenges in this project plan?"
+}
+
+### Analyze Mindmap Structure
+POST http://localhost:4000/api/ai/analyze
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "mindMapId": "{{mindmap_id}}",
+  "nodes": [
+    { "id": "node1", "text": "Main Topic", "position": { "x": 0, "y": 0 }, "connections": [] },
+    { "id": "node2", "text": "Subtopic A", "position": { "x": 150, "y": 50 }, "connections": ["node1"] }
+  ],
+  "connections": []
+}
+
+### Convert Mindmap to Markdown
+POST http://localhost:4000/api/ai/convert
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "mindMapId": "{{mindmap_id}}",
+  "format": "markdown"
+}
