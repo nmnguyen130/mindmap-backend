@@ -4,6 +4,18 @@ alter table public.mindmap_nodes enable row level security;
 alter table public.files enable row level security;
 alter table public.mindmap_analyses enable row level security;
 
+-- Grant permissions to authenticated role (required for RLS to work)
+grant select, insert, update, delete on public.mindmaps to authenticated;
+grant select, insert, update, delete on public.mindmap_nodes to authenticated;
+grant select, insert, update, delete on public.files to authenticated;
+grant select, insert, update, delete on public.mindmap_analyses to authenticated;
+
+-- Grant permissions to anon role (for public access with RLS)
+grant select, insert, update, delete on public.mindmaps to anon;
+grant select, insert, update, delete on public.mindmap_nodes to anon;
+grant select, insert, update, delete on public.files to anon;
+grant select, insert, update, delete on public.mindmap_analyses to anon;
+
 -- Mindmaps: owner-only access for all operations
 create policy "owner select mindmaps" on public.mindmaps for select using (auth.uid() = owner_id);
 create policy "owner insert mindmaps" on public.mindmaps for insert with check (auth.uid() = owner_id);

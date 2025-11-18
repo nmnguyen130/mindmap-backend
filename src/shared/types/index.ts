@@ -4,8 +4,13 @@ export interface MindMapNode {
   id: string
   text: string
   position: Position
-  connections: string[]
+  parent_id?: string | null
+  children_order?: string[]
+  data?: any
   notes?: string
+  collapsed?: boolean
+  created_at?: string
+  updated_at?: string
 }
 
 export interface MindMap {
