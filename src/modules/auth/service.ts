@@ -1,117 +1,118 @@
-import { supabase, supabaseAdmin } from '@/config/supabase'
-import { UnauthorizedError, BadRequestError } from '@/core/utils/errors'
-import type { User } from '@supabase/supabase-js'
-import type { AuthUser } from '@/shared/types'
+import { supabase } from '@/config/supabase';
+import { AuthenticationError, ConflictError } from '@/utils/errors';
+import { logger } from '@/utils/logger';
 
-function createUserResponse(user: User): AuthUser {
-  return {
-    id: user.id,
-    email: user.email!,
-  }
+export interface AuthResult {
+    access_token: string;
+    refresh_token: string;
+    user: {
+        id: string;
+        email: string;
+    };
 }
 
-export async function register(email: string, password: string) {
-  const { data, error } = await supabaseAdmin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-  })
+export interface UserInfo {
+    id: string;
+    email: string;
+}
 
-  if (error) {
-    if (error.message.includes('already registered')) {
-      throw new BadRequestError('Email already registered')
+/**
+ * Register new user
+ */
+export const register = async (
+    email: string,
+    password: string
+): Promise<AuthResult> => {
+    const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+    });
+
+    if (error) {
+        logger.error({ error }, 'Registration failed');
+        if (error.message.includes('already registered')) {
+            throw new ConflictError('Email already registered');
+        }
+        throw new Error(error.message);
     }
-    throw new BadRequestError(error.message)
-  }
 
-  if (!data.user) {
-    throw new BadRequestError('Failed to create user')
-  }
+    if (!data.session || !data.user) {
+        throw new Error('Registration succeeded but no session created');
+    }
 
-  // After creating, sign in to get session
-  const { data: sessionData, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+    return {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        user: {
+            id: data.user.id,
+            email: data.user.email!,
+        },
+    };
+};
 
-  if (signInError) {
-    throw new BadRequestError('User created but failed to sign in')
-  }
+/**
+ * Login user
+ */
+export const login = async (email: string, password: string): Promise<AuthResult> => {
+    const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+    });
 
-  return {
-    user: createUserResponse(data.user),
-    accessToken: sessionData.session.access_token,
-    refreshToken: sessionData.session.refresh_token,
-    expiresAt: sessionData.session.expires_at,
-  }
-}
+    if (error) {
+        logger.error({ error }, 'Login failed');
+        throw new AuthenticationError('Invalid email or password');
+    }
 
-export async function login(email: string, password: string) {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+    if (!data.session || !data.user) {
+        throw new AuthenticationError('Login failed');
+    }
 
-  if (error) {
-    throw new UnauthorizedError('Invalid email or password')
-  }
+    return {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        user: {
+            id: data.user.id,
+            email: data.user.email!,
+        },
+    };
+};
 
-  if (!data.user || !data.session) {
-    throw new UnauthorizedError('Invalid email or password')
-  }
+/**
+ * Refresh access token
+ */
+export const refreshToken = async (refreshToken: string): Promise<AuthResult> => {
+    const { data, error } = await supabase.auth.refreshSession({
+        refresh_token: refreshToken,
+    });
 
-  return {
-    user: createUserResponse(data.user),
-    accessToken: data.session.access_token,
-    refreshToken: data.session.refresh_token,
-    expiresAt: data.session.expires_at,
-  }
-}
+    if (error || !data.session) {
+        logger.error({ error }, 'Token refresh failed');
+        throw new AuthenticationError('Invalid or expired refresh token');
+    }
 
-export async function refresh(refreshToken: string) {
-  if (!refreshToken) {
-    throw new BadRequestError('Refresh token is required')
-  }
+    return {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        user: {
+            id: data.user!.id,
+            email: data.user!.email!,
+        },
+    };
+};
 
-  const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken })
+/**
+ * Get current user info
+ */
+export const getCurrentUser = async (accessToken: string): Promise<UserInfo> => {
+    const { data, error } = await supabase.auth.getUser(accessToken);
 
-  if (error) {
-    throw new UnauthorizedError('Invalid or expired refresh token')
-  }
+    if (error || !data.user) {
+        throw new AuthenticationError('Invalid or expired token');
+    }
 
-  if (!data.session) {
-    throw new UnauthorizedError('Failed to refresh session')
-  }
-
-  return {
-    user: data.user ? createUserResponse(data.user) : null,
-    accessToken: data.session.access_token,
-    refreshToken: data.session.refresh_token,
-    expiresAt: data.session.expires_at,
-  }
-}
-
-export async function logout(accessToken: string) {
-  if (!accessToken) {
-    throw new BadRequestError('Access token is required')
-  }
-
-  // Verify token and sign out
-  const { error } = await supabaseAdmin.auth.admin.signOut(accessToken)
-
-  if (error) {
-    // Don't throw error on logout - best effort
-    return { message: 'Logged out (with warnings)' }
-  }
-
-  return { message: 'Logged out successfully' }
-}
-
-export async function getProfile(userId: string) {
-  const { data, error } = await supabaseAdmin.auth.admin.getUserById(userId)
-
-  if (error || !data.user) {
-    throw new UnauthorizedError('User not found')
-  }
-
-  return {
-    id: data.user.id,
-    email: data.user.email,
-    emailVerified: data.user.email_confirmed_at !== null,
-    createdAt: data.user.created_at,
-  }
-}
+    return {
+        id: data.user.id,
+        email: data.user.email!,
+    };
+};

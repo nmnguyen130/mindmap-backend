@@ -1,22 +1,35 @@
-import { Router } from 'express'
-import { requireAuth } from '@/core/middlewares/auth'
-import { validate } from '@/core/middlewares/validate'
-import * as Ctrl from './controller'
-import { mindMapCreateSchema, mindMapUpdateSchema, nodeCreateSchema, nodeUpdateSchema } from './validator'
+import { Router } from 'express';
+import { authenticate } from '@/middlewares/auth';
+import { validate } from '@/middlewares/validation';
+import { createMindmapSchema, updateMindmapSchema } from './schemas';
+import * as mindmapController from './controller';
 
-const router = Router()
+const router = Router();
 
-// Mindmaps routes
-router.get('/mindmaps', requireAuth, Ctrl.listMindMaps)
-router.post('/mindmaps', requireAuth, validate(mindMapCreateSchema), Ctrl.createMindMap)
-router.get('/mindmaps/:id', requireAuth, Ctrl.getMindMap)
-router.put('/mindmaps/:id', requireAuth, validate(mindMapUpdateSchema), Ctrl.updateMindMap)
-router.delete('/mindmaps/:id', requireAuth, Ctrl.deleteMindMap)
+// All routes require authentication
+router.use(authenticate);
 
-// Nodes routes
-router.get('/mindmaps/:id/nodes', requireAuth, Ctrl.listNodes)
-router.post('/mindmaps/:id/nodes', requireAuth, validate(nodeCreateSchema), Ctrl.addNode)
-router.put('/nodes/:id', requireAuth, validate(nodeUpdateSchema), Ctrl.updateNode)
-router.delete('/nodes/:id', requireAuth, Ctrl.deleteNode)
+// POST /api/mindmaps - Create mindmap
+router.post(
+    '/',
+    validate(createMindmapSchema, 'body'),
+    mindmapController.create
+);
 
-export default router
+// GET /api/mindmaps - List all user mindmaps
+router.get('/', mindmapController.list);
+
+// GET /api/mindmaps/:id - Get mindmap with nodes
+router.get('/:id', mindmapController.get);
+
+// PUT /api/mindmaps/:id - Update mindmap
+router.put(
+    '/:id',
+    validate(updateMindmapSchema, 'body'),
+    mindmapController.update
+);
+
+// DELETE /api/mindmaps/:id - Delete mindmap
+router.delete('/:id', mindmapController.remove);
+
+export default router;

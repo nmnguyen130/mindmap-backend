@@ -1,0 +1,56 @@
+@baseUrl = http://localhost:4000/api
+
+### 1. Login
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "TestPassword123!"
+}
+
+###
+
+### Auth Token
+@accessToken = {{login.response.body.data.accessToken}}
+
+###
+
+### 2. Create Mindmap
+POST {{baseUrl}}/mindmaps
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "title": "Test Mindmap"
+}
+
+###
+
+### 3. List Mindmaps
+GET {{baseUrl}}/mindmaps
+Authorization: Bearer {{accessToken}}
+
+###
+
+### 4. Get Mindmap
+GET {{baseUrl}}/mindmaps/MINDMAP_ID_HERE
+Authorization: Bearer {{accessToken}}
+
+###
+
+### 5. Update Mindmap
+PUT {{baseUrl}}/mindmaps/MINDMAP_ID_HERE
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "title": "Updated Title"
+}
+
+###
+
+### 6. Delete Mindmap
+DELETE {{baseUrl}}/mindmaps/MINDMAP_ID_HERE
+Authorization: Bearer {{accessToken}}

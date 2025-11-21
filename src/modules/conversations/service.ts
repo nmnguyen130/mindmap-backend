@@ -1,0 +1,149 @@
+import { supabaseAdmin } from '@/config/supabase';
+import { NotFoundError } from '@/utils/errors';
+import { logger } from '@/utils/logger';
+
+export interface Conversation {
+    id: string;
+    user_id: string;
+    title: string | null;
+    context_mode: string;
+    metadata: Record<string, any>;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface Message {
+    id: string;
+    conversation_id: string;
+    role: string;
+    content: string;
+    metadata: Record<string, any>;
+    created_at: string;
+}
+
+export interface ConversationWithMessages extends Conversation {
+    messages: Message[];
+}
+
+/**
+ * Create a new conversation
+ */
+export const createConversation = async (
+    userId: string,
+    title?: string,
+    contextMode: 'rag' | 'normal' = 'rag'
+): Promise<Conversation> => {
+    const { data, error } = await supabaseAdmin
+        .from('conversations')
+        .insert({
+            user_id: userId,
+            title,
+            context_mode: contextMode,
+        })
+        .select()
+        .single();
+
+    if (error || !data) {
+        logger.error({ error }, 'Failed to create conversation');
+        throw new Error('Failed to create conversation');
+    }
+
+    return data as Conversation;
+};
+
+/**
+ * List user conversations
+ */
+export const listConversations = async (userId: string): Promise<Conversation[]> => {
+    const { data, error } = await supabaseAdmin
+        .from('conversations')
+        .select('*')
+        .eq('user_id', userId)
+        .order('updated_at', { ascending: false });
+
+    if (error) {
+        logger.error({ error }, 'Failed to list conversations');
+        throw new Error('Failed to list conversations');
+    }
+
+    return (data as Conversation[]) || [];
+};
+
+/**
+ * Get conversation with messages
+ */
+export const getConversation = async (
+    conversationId: string,
+    userId: string
+): Promise<ConversationWithMessages> => {
+    // Get conversation
+    const { data: conversation, error: convError } = await supabaseAdmin
+        .from('conversations')
+        .select('*')
+        .eq('id', conversationId)
+        .eq('user_id', userId)
+        .single();
+
+    if (convError || !conversation) {
+        throw new NotFoundError('Conversation not found');
+    }
+
+    // Get messages
+    const { data: messages, error: msgError } = await supabaseAdmin
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', conversationId)
+        .order('created_at', { ascending: true });
+
+    if (msgError) {
+        logger.error({ msgError }, 'Failed to get messages');
+        throw new Error('Failed to retrieve messages');
+    }
+
+    return {
+        ...conversation,
+        messages: (messages as Message[]) || [],
+    } as ConversationWithMessages;
+};
+
+/**
+ * Update conversation title
+ */
+export const updateConversation = async (
+    conversationId: string,
+    userId: string,
+    title: string
+): Promise<Conversation> => {
+    const { data, error } = await supabaseAdmin
+        .from('conversations')
+        .update({ title })
+        .eq('id', conversationId)
+        .eq('user_id', userId)
+        .select()
+        .single();
+
+    if (error || !data) {
+        throw new NotFoundError('Conversation not found');
+    }
+
+    return data as Conversation;
+};
+
+/**
+ * Delete conversation
+ */
+export const deleteConversation = async (
+    conversationId: string,
+    userId: string
+): Promise<void> => {
+    const { error } = await supabaseAdmin
+        .from('conversations')
+        .delete()
+        .eq('id', conversationId)
+        .eq('user_id', userId);
+
+    if (error) {
+        logger.error({ error }, 'Failed to delete conversation');
+        throw new Error('Failed to delete conversation');
+    }
+};

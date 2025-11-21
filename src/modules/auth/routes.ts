@@ -1,18 +1,36 @@
-import { Router } from 'express'
-import { requireAuth } from '@/core/middlewares/auth'
-import { validate } from '@/core/middlewares/validate'
-import * as Ctrl from './controller'
-import { registerSchema, loginSchema, refreshTokenSchema } from './validator'
+import { Router } from 'express';
+import { authenticate } from '@/middlewares/auth';
+import { validate } from '@/middlewares/validation';
+import { authLimiter } from '@/middlewares/rateLimiter';
+import { registerSchema, loginSchema, refreshSchema } from './schemas';
+import * as authController from './controller';
 
-const router = Router()
+const router = Router();
 
-// Public routes
-router.post('/register', validate(registerSchema), Ctrl.register)
-router.post('/login', validate(loginSchema), Ctrl.login)
-router.post('/refresh', validate(refreshTokenSchema), Ctrl.refresh)
+// POST /api/auth/register
+router.post(
+    '/register',
+    authLimiter,
+    validate(registerSchema, 'body'),
+    authController.register
+);
 
-// Protected routes
-router.get('/me', requireAuth, Ctrl.me)
-router.post('/logout', requireAuth, Ctrl.logout)
+// POST /api/auth/login
+router.post(
+    '/login',
+    authLimiter,
+    validate(loginSchema, 'body'),
+    authController.login
+);
 
-export default router
+// POST /api/auth/refresh
+router.post(
+    '/refresh',
+    validate(refreshSchema, 'body'),
+    authController.refresh
+);
+
+// GET /api/auth/me
+router.get('/me', authenticate, authController.me);
+
+export default router;

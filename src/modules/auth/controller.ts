@@ -1,63 +1,72 @@
-import { Request, Response, NextFunction } from 'express'
-import { ApiResponseHelper } from '@/core/utils/response'
-import { AuthedRequest, extractBearerToken } from '@/core/middlewares/auth'
-import * as authService from '@/modules/auth/service'
-import type { RegisterInput, LoginInput, RefreshTokenInput } from '@/modules/auth/validator'
+import { Request, Response, NextFunction } from 'express';
+import { AuthRequest } from '@/middlewares/auth';
+import * as authService from './service';
+import { success } from '@/utils/response';
+import { RegisterInput, LoginInput, RefreshInput } from './schemas';
 
-export async function register(req: Request<{}, {}, RegisterInput>, res: Response, next: NextFunction) {
-  try {
-    const { email, password } = req.body
-    const data = await authService.register(email, password)
-    return ApiResponseHelper.created(res, data)
-  } catch (error) {
-    next(error)
-  }
-}
-
-export async function login(req: Request<{}, {}, LoginInput>, res: Response, next: NextFunction) {
-  try {
-    const { email, password } = req.body
-    const data = await authService.login(email, password)
-    return ApiResponseHelper.success(res, data)
-  } catch (error) {
-    next(error)
-  }
-}
-
-export async function refresh(req: Request<{}, {}, RefreshTokenInput>, res: Response, next: NextFunction) {
-  try {
-    const { refreshToken } = req.body
-    const data = await authService.refresh(refreshToken)
-    return ApiResponseHelper.success(res, data)
-  } catch (error) {
-    next(error)
-  }
-}
-
-export async function me(req: AuthedRequest, res: Response, next: NextFunction) {
-  try {
-    if (!req.user?.id) {
-      return ApiResponseHelper.unauthorized(res)
+/**
+ * POST /api/auth/register
+ */
+export const register = async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    try {
+        const body = req.body as RegisterInput;
+        const result = await authService.register(body.email, body.password);
+        success(res, result, 201);
+    } catch (error) {
+        next(error);
     }
+};
 
-    const profile = await authService.getProfile(req.user.id)
-    return ApiResponseHelper.success(res, profile)
-  } catch (error) {
-    next(error)
-  }
-}
-
-export async function logout(req: AuthedRequest, res: Response, next: NextFunction) {
-  try {
-    const token = extractBearerToken(req)
-
-    if (!token) {
-      return ApiResponseHelper.unauthorized(res, 'No token provided')
+/**
+ * POST /api/auth/login
+ */
+export const login = async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    try {
+        const body = req.body as LoginInput;
+        const result = await authService.login(body.email, body.password);
+        success(res, result);
+    } catch (error) {
+        next(error);
     }
+};
 
-    const data = await authService.logout(token)
-    return ApiResponseHelper.success(res, data)
-  } catch (error) {
-    next(error)
-  }
-}
+/**
+ * POST /api/auth/refresh
+ */
+export const refresh = async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    try {
+        const body = req.body as RefreshInput;
+        const result = await authService.refreshToken(body.refresh_token);
+        success(res, result);
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * GET /api/auth/me
+ */
+export const me = async (
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    try {
+        const user = await authService.getCurrentUser(req.accessToken!);
+        success(res, user);
+    } catch (error) {
+        next(error);
+    }
+};

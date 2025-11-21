@@ -1,0 +1,51 @@
+@baseUrl = http://localhost:4000/api
+
+### 1. Login
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "TestPassword123!"
+}
+
+###
+
+### Auth Token
+@accessToken = {{login.response.body.data.accessToken}}
+
+###
+
+### 2. Ingest Document
+POST {{baseUrl}}/ingest
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "text": "This is a test document for RAG system."
+}
+
+###
+
+### 3. Chat
+POST {{baseUrl}}/chat
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "question": "What is RAG?",
+  "stream": true
+}
+
+###
+
+### 4. Query
+POST {{baseUrl}}/query
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "question": "Tell me about machine learning",
+  "stream": false
+}

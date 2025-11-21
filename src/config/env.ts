@@ -1,24 +1,49 @@
-import 'dotenv/config'
+import { z } from 'zod';
+import dotenv from 'dotenv';
 
-export const env = {
-  nodeEnv: process.env.NODE_ENV || 'development',
-  port: Number(process.env.PORT || 4000),
-  logLevel: process.env.LOG_LEVEL || 'info',
-  supabaseUrl: process.env.SUPABASE_URL || '',
-  supabaseAnonKey: process.env.SUPABASE_ANON_KEY || '',
-  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
-  supabaseJwtSecret: process.env.SUPABASE_JWT_SECRET || '',
-  supabaseDbSchema: process.env.SUPABASE_DB_SCHEMA || 'public',
-  supabaseStorageBucket: process.env.SUPABASE_STORAGE_BUCKET || 'files',
-  corsOrigin: process.env.CORS_ORIGIN || '*',
-  openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
-}
+dotenv.config();
 
-export function assertEnv() {
-  const required = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY']
-  for (const key of required) {
-    if (!process.env[key]) {
-      throw new Error(`Missing required env: ${key}`)
+const envSchema = z.object({
+    // Server
+    NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+    PORT: z.string().default('5000').transform(Number),
+
+    // Supabase
+    SUPABASE_URL: z.url({ error: 'Invalid Supabase URL' }),
+    SUPABASE_ANON_KEY: z.string().min(1, { error: 'Supabase anon key is required' }),
+    SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, { error: 'Supabase service role key is required' }),
+
+    // OpenAI / OpenRouter
+    OPENAI_API_KEY: z.string().min(1, { error: 'OpenAI/OpenRouter API key is required' }),
+    OPENAI_MODEL: z.string().default('gpt-4-turbo-preview'),
+    OPENAI_EMBEDDING_MODEL: z.string().default('text-embedding-3-small'),
+    OPENROUTER_BASE_URL: z.url().optional().default('https://openrouter.ai/api/v1'),
+
+    // RAG Configuration
+    CHUNK_SIZE: z.string().default('1000').transform(Number),
+    CHUNK_OVERLAP: z.string().default('200').transform(Number),
+    TOP_K_CHUNKS: z.string().default('5').transform(Number),
+
+    // Rate Limiting
+    RATE_LIMIT_WINDOW_MS: z.string().default('900000').transform(Number),
+    RATE_LIMIT_MAX_REQUESTS: z.string().default('100').transform(Number),
+});
+
+export type Env = z.infer<typeof envSchema>;
+
+let env: Env;
+
+try {
+    env = envSchema.parse(process.env);
+} catch (error) {
+    if (error instanceof z.ZodError) {
+        console.error('Invalid environment variables:');
+        error.issues.forEach((issue) => {
+            console.error(`  - ${issue.path.join('.')}: ${issue.message}`);
+        });
+        process.exit(1);
     }
-  }
+    throw error;
 }
+
+export { env };

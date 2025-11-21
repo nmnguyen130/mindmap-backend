@@ -1,26 +1,31 @@
-import { createClient } from '@supabase/supabase-js'
-import { env } from './env'
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { env } from './env';
 
-export const supabaseAdmin = createClient(env.supabaseUrl, env.supabaseServiceRoleKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-})
-
-export const supabase = createClient(env.supabaseUrl, env.supabaseAnonKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-})
-
-export function createUserSupabaseClient(jwt: string) {
-  const client = createClient(env.supabaseUrl, env.supabaseAnonKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-    global: {
-      headers: {
-        Authorization: `Bearer ${jwt}`
-      }
+// Service role client for admin operations (bypass RLS)
+export const supabaseAdmin: SupabaseClient = createClient(
+    env.SUPABASE_URL,
+    env.SUPABASE_SERVICE_ROLE_KEY,
+    {
+        auth: {
+            autoRefreshToken: false,
+            persistSession: false,
+        },
     }
-  })
-  
-  // Set the session to ensure auth.uid() works in RLS policies
-  // This is a workaround since we're using server-side authentication
-  // The JWT should already contain the user context
-  return client
-}
+);
+
+// Anon client for user operations (respects RLS)
+export const supabase: SupabaseClient = createClient(
+    env.SUPABASE_URL,
+    env.SUPABASE_ANON_KEY
+);
+
+// Helper to create per-request client with user JWT
+export const createSupabaseClient = (accessToken: string): SupabaseClient => {
+    return createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
+        global: {
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+            },
+        },
+    });
+};

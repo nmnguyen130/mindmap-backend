@@ -1,0 +1,33 @@
+@baseUrl = http://localhost:4000/api
+
+### 1. Register
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "TestPassword123!"
+}
+
+###
+
+### 2. Login
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "TestPassword123!"
+}
+
+###
+
+### Access Token
+@accessToken = {{login.response.body.data.accessToken}}
+
+###
+
+### 3. Get Me
+GET {{baseUrl}}/auth/me
+Authorization: Bearer {{accessToken}}

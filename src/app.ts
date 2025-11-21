@@ -1,36 +1,66 @@
-import express from 'express'
-import helmet from 'helmet'
-import cors from 'cors'
-import { apiRateLimit } from '@/core/middlewares/rateLimit'
-import api from '@/modules'
-import { errorHandler } from '@/core/middlewares/error'
-import { env, assertEnv } from '@/config/env'
-import { logger } from '@/core/utils/logger'
-import path from 'node:path'
+import express, { Application } from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import { env } from '@/config/env';
+import { generalLimiter } from '@/middlewares/rateLimiter';
+import { errorHandler } from '@/middlewares/errorHandler';
+import { logger } from '@/utils/logger';
 
-assertEnv()
+// Import routes
+import authRoutes from '@/modules/auth/routes';
+import ragRoutes from '@/modules/rag/routes';
+import conversationRoutes from '@/modules/conversations/routes';
+import mindmapRoutes from '@/modules/mindmaps/routes';
 
-export const app = express()
+export const createApp = (): Application => {
+    const app = express();
 
-app.use(helmet())
-app.use(cors({ origin: env.corsOrigin }))
-app.use(express.json({ limit: '2mb' }))
-app.use(express.urlencoded({ extended: true }))
-app.use(apiRateLimit)
+    // Security middleware
+    app.use(helmet({
+        crossOriginResourcePolicy: { policy: 'cross-origin' },
+    }));
 
-// OpenAPI docs JSON
-app.get('/api/docs/openapi.json', (_req, res) => {
-  res.sendFile(path.join(process.cwd(), 'docs', 'openapi.json'))
-})
+    // CORS
+    app.use(cors({
+        origin: env.NODE_ENV === 'production'
+            ? ['https://your-frontend-domain.com']
+            : ['http://localhost:3000', 'http://localhost:19006'],
+        credentials: true,
+    }));
 
-// Routes
-app.use('/api', api)
+    // Body parsing
+    app.use(express.json({ limit: '10mb' }));
+    app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Health
-app.get('/health', (_req, res) => res.json({ ok: true }))
+    // Rate limiting
+    app.use(generalLimiter);
 
-// Errors
-app.use(errorHandler)
+    // Health check
+    app.get('/health', (req, res) => {
+        res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    });
 
-process.on('unhandledRejection', (reason) => logger.error({ reason }, 'unhandledRejection'))
-process.on('uncaughtException', (err) => logger.error({ err }, 'uncaughtException'))
+    // API routes
+    app.use('/api/auth', authRoutes);
+    app.use('/api', ragRoutes);
+    app.use('/api/conversations', conversationRoutes);
+    app.use('/api/mindmaps', mindmapRoutes);
+
+    // 404 handler
+    app.use((req, res) => {
+        res.status(404).json({
+            success: false,
+            error: {
+                message: 'Route not found',
+                code: 'NOT_FOUND',
+            },
+        });
+    });
+
+    // Error handler (must be last)
+    app.use(errorHandler);
+
+    logger.info('Express app configured');
+
+    return app;
+};

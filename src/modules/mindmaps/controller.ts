@@ -1,86 +1,113 @@
-import { Request, Response } from 'express'
-import type { AuthedRequest } from '@/core/middlewares/auth'
-import { mindmapsService } from './service'
+import { Response, NextFunction } from 'express';
+import { AuthRequest } from '@/middlewares/auth';
+import * as mindmapService from './service';
+import { success } from '@/utils/response';
+import { CreateMindmapInput, UpdateMindmapInput } from './schemas';
 
-// Mindmaps controller functions
-export async function listMindMaps(req: AuthedRequest, res: Response) {
-  try {
-    const mindmaps = await mindmapsService.listMindMaps(req.supabase!, req.user!.id)
-    res.json(mindmaps)
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to list mindmaps' })
-  }
-}
+/**
+ * POST /api/mindmaps
+ */
+export const create = async (
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    try {
+        const userId = req.user!.id;
+        const body = req.body as CreateMindmapInput;
 
-export async function createMindMap(req: AuthedRequest, res: Response) {
-  try {
-    const data = await mindmapsService.createMindMap(req.supabase!, req.user!.id, req.body)
-    res.json(data)
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to create mindmap' })
-  }
-}
+        const mindmap = await mindmapService.createMindmap(
+            userId,
+            body.title,
+            body.source_file_id
+        );
 
-export async function getMindMap(req: AuthedRequest, res: Response) {
-  try {
-    const mindmap = await mindmapsService.getMindMap(req.supabase!, req.params.id!, req.user!.id)
-    res.json(mindmap)
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to get mindmap' })
-  }
-}
+        success(res, mindmap, 201);
+    } catch (error) {
+        next(error);
+    }
+};
 
-export async function updateMindMap(req: AuthedRequest, res: Response) {
-  try {
-    const data = await mindmapsService.updateMindMap(req.supabase!, req.params.id!, req.user!.id, req.body)
-    res.json(data)
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to update mindmap' })
-  }
-}
+/**
+ * GET /api/mindmaps
+ */
+export const list = async (
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    try {
+        const userId = req.user!.id;
+        const mindmaps = await mindmapService.listMindmaps(userId);
+        success(res, mindmaps);
+    } catch (error) {
+        next(error);
+    }
+};
 
-export async function deleteMindMap(req: AuthedRequest, res: Response) {
-  try {
-    await mindmapsService.deleteMindMap(req.supabase!, req.params.id!, req.user!.id)
-    res.json({ message: 'Mindmap deleted successfully' })
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to delete mindmap' })
-  }
-}
+/**
+ * GET /api/mindmaps/:id
+ */
+export const get = async (
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    try {
+        const userId = req.user!.id;
+        const mindmapId = req.params.id;
+        if (!mindmapId) {
+            throw new Error('Mindmap ID is required');
+        }
 
-// Nodes controller functions
-export async function listNodes(req: AuthedRequest, res: Response) {
-  try {
-    const nodes = await mindmapsService.listNodes(req.supabase!, req.params.id!, req.user!.id)
-    res.json(nodes)
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to list nodes' })
-  }
-}
+        const mindmap = await mindmapService.getMindmap(mindmapId, userId);
+        success(res, mindmap);
+    } catch (error) {
+        next(error);
+    }
+};
 
-export async function addNode(req: AuthedRequest, res: Response) {
-  try {
-    const data = await mindmapsService.addNode(req.supabase!, req.params.id!, req.body, req.user!.id)
-    res.json(data)
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to add node' })
-  }
-}
+/**
+ * PUT /api/mindmaps/:id
+ */
+export const update = async (
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    try {
+        const userId = req.user!.id;
+        const mindmapId = req.params.id;
+        if (!mindmapId) {
+            throw new Error('Mindmap ID is required');
+        }
+        const body = req.body as UpdateMindmapInput;
 
-export async function updateNode(req: AuthedRequest, res: Response) {
-  try {
-    const data = await mindmapsService.updateNode(req.supabase!, req.params.id!, req.body, req.user!.id)
-    res.json(data)
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to update node' })
-  }
-}
+        const mindmap = await mindmapService.updateMindmap(mindmapId, userId, body);
+        success(res, mindmap);
+    } catch (error) {
+        next(error);
+    }
+};
 
-export async function deleteNode(req: AuthedRequest, res: Response) {
-  try {
-    await mindmapsService.deleteNode(req.supabase!, req.params.id!, req.user!.id)
-    res.json({ message: 'Node deleted successfully' })
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to delete node' })
-  }
-}
+/**
+ * DELETE /api/mindmaps/:id
+ */
+export const remove = async (
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    try {
+        const userId = req.user!.id;
+        const mindmapId = req.params.id;
+        if (!mindmapId) {
+            throw new Error('Mindmap ID is required');
+        }
+
+        await mindmapService.deleteMindmap(mindmapId, userId);
+        success(res, { deleted: true });
+    } catch (error) {
+        next(error);
+    }
+};

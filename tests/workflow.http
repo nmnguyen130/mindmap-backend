@@ -1,0 +1,119 @@
+@baseUrl = http://localhost:4000/api
+
+### 1. Register
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "workflow@example.com",
+  "password": "Workflow123!"
+}
+
+###
+
+### 2. Login
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "workflow@example.com",
+  "password": "Workflow123!"
+}
+
+###
+
+### Auth Token
+@accessToken = {{login.response.body.data.accessToken}}
+
+###
+
+### 3. Get Me
+GET {{baseUrl}}/auth/me
+Authorization: Bearer {{accessToken}}
+
+###
+
+### 4. Ingest Document
+POST {{baseUrl}}/ingest
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "text": "Neural networks are computing systems."
+}
+
+###
+
+### 5. Create Conversation
+POST {{baseUrl}}/conversations
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "title": "AI Discussion"
+}
+
+###
+
+### 6. Chat
+POST {{baseUrl}}/chat
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "question": "What are neural networks?",
+  "stream": true
+}
+
+###
+
+### 7. Get Conversation
+GET {{baseUrl}}/conversations/CONVERSATION_ID_HERE
+Authorization: Bearer {{accessToken}}
+
+###
+
+### 8. Create Mindmap
+POST {{baseUrl}}/mindmaps
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "title": "Test Mindmap"
+}
+
+###
+
+### 9. List Conversations
+GET {{baseUrl}}/conversations
+Authorization: Bearer {{accessToken}}
+
+###
+
+### 10. List Mindmaps
+GET {{baseUrl}}/mindmaps
+Authorization: Bearer {{accessToken}}
+
+###
+
+### 11. Update Conversation
+PUT {{baseUrl}}/conversations/CONVERSATION_ID_HERE
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "title": "Updated Discussion"
+}
+
+###
+
+### 12. Query
+POST {{baseUrl}}/query
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "question": "What is AI?",
+  "stream": false
+}
