@@ -18,5 +18,13 @@ export const updateMindmapSchema = z.object({
         .optional(),
 });
 
+export const chatWithNodeSchema = z.object({
+    question: z.string()
+        .min(1, { error: 'Question is required' })
+        .max(1000, { error: 'Question must not exceed 1000 characters' }),
+    stream: z.boolean().optional().default(true),
+});
+
 export type CreateMindmapInput = z.infer<typeof createMindmapSchema>;
 export type UpdateMindmapInput = z.infer<typeof updateMindmapSchema>;
+export type ChatWithNodeInput = z.infer<typeof chatWithNodeSchema>;

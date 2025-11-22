@@ -1,14 +1,12 @@
 -- Enable pgvector extension for AI embeddings
 create extension if not exists vector;
 
--- Add source file reference to mindmaps
-alter table public.mindmaps add column if not exists source_file_id uuid references public.files(id) on delete set null;
-
--- PDF document chunks with embeddings
+-- Document chunks with embeddings for RAG
 create table if not exists public.document_chunks (
   id uuid primary key default gen_random_uuid(),
   file_id uuid not null references public.files(id) on delete cascade,
   mindmap_id uuid references public.mindmaps(id) on delete cascade,
+  node_id text,  -- Links chunk to mindmap node for scoped queries
   content text not null,
   embedding vector(384),  -- all-MiniLM-L6-v2 dimension (local model)
   start_page integer,
@@ -17,31 +15,32 @@ create table if not exists public.document_chunks (
   created_at timestamptz not null default now()
 );
 
--- Conversations (renamed from ai_chat_sessions for clarity)
+-- Conversations for chat history
 create table if not exists public.conversations (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   title text,
   context_mode text default 'rag' check (context_mode in ('rag', 'normal')),
-  metadata jsonb default '{}'::jsonb,  -- Store document_id, mindmap_id references
+  metadata jsonb default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
--- Messages (renamed from ai_chat_messages)
+-- Messages in conversations
 create table if not exists public.messages (
   id uuid primary key default gen_random_uuid(),
   conversation_id uuid not null references public.conversations(id) on delete cascade,
   role text not null check (role in ('user', 'assistant', 'system')),
   content text not null,
-  metadata jsonb default '{}'::jsonb,  -- Store retrieved chunk IDs, relevance scores
+  metadata jsonb default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
 
 -- Indexes
 create index if not exists idx_document_chunks_file on public.document_chunks(file_id);
+create index if not exists idx_document_chunks_mindmap_node on public.document_chunks(mindmap_id, node_id);
+create index if not exists idx_document_chunks_node on public.document_chunks(node_id);
 create index if not exists idx_document_chunks_content on public.document_chunks using gin(to_tsvector('english', content));
--- Use HNSW for better performance in production (requires pgvector 0.5.0+)
 create index if not exists idx_document_chunks_embedding on public.document_chunks 
   using hnsw (embedding vector_cosine_ops) with (m = 16, ef_construction = 64);
 create index if not exists idx_conversations_user on public.conversations(user_id);
@@ -65,7 +64,7 @@ alter table public.document_chunks enable row level security;
 alter table public.conversations enable row level security;
 alter table public.messages enable row level security;
 
--- Document chunks policies: owner access via file or mindmap ownership
+-- Document chunks policies
 create policy "chunks select" on public.document_chunks for select using (
   exists (select 1 from public.files f where f.id = file_id and f.user_id = auth.uid())
   or
@@ -81,13 +80,13 @@ create policy "chunks insert" on public.document_chunks for insert with check (
 create policy "chunks update/delete" on public.document_chunks
   for all using (false) with check (false);  -- only service_role can modify/delete chunks
 
--- Conversation policies: users can only access their own conversations
+-- Conversation policies
 create policy "conversations select" on public.conversations for select using (auth.uid() = user_id);
 create policy "conversations insert" on public.conversations for insert with check (auth.uid() = user_id);
 create policy "conversations update" on public.conversations for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "conversations delete" on public.conversations for delete using (auth.uid() = user_id);
 
--- Message policies: users can only access messages from their own conversations
+-- Message policies
 create policy "messages select" on public.messages for select
   using (exists (select 1 from public.conversations c where c.id = conversation_id and c.user_id = auth.uid()));
 

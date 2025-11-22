@@ -1,81 +1,77 @@
-# Production-Ready RAG Backend with Supabase
+# Mindmap Backend - RAG System with AI Mindmap Generation
 
-A complete, minimal RAG (Retrieval-Augmented Generation) system built with TypeScript, Node.js, and Supabase as the sole database and vector store.
+Production-ready backend for an intelligent document analysis system. Upload PDFs to automatically generate interactive mindmaps with AI-powered topic extraction and scoped Q&A capabilities.
 
-## Architecture
+## Overview
 
 ```mermaid
-graph TB
-    Client[Client Application] --> API[Express API Server]
-    
-    API --> Auth[Auth Module]
-    API --> RAG[RAG Module]
-    API --> Conv[Conversations Module]
-    API --> Mind[Mindmaps Module]
-    
-    Auth --> SB[Supabase]
-    RAG --> SB
-    Conv --> SB
-    Mind --> SB
-    
-    RAG --> OAI[OpenAI API]
-    
-    SB --> PG[(PostgreSQL + pgvector)]
-    SB --> AuthS[Supabase Auth]
-    SB --> RLS[Row Level Security]
-    
-    OAI --> Embed[Embeddings API]
-    OAI --> Chat[Chat Completions API]
-    
+flowchart TB
+    User[Client] -->|1. Upload PDF| API[POST /mindmaps/create-from-pdf]
+
+    API --> Store[Supabase Storage]
+    API --> Parse[PDF Text Extraction]
+
+    Parse --> LLM[OpenAI GPT-4]
+    LLM --> Mindmap[AI Mindmap Generation]
+
+    Parse --> Chunk[Document Chunking]
+    Chunk --> Embed[Generate Embeddings]
+
+    Mindmap --> Map[Semantic Chunk-to-Node Mapping]
+    Embed --> Map
+
+    Map --> DB[(PostgreSQL + pgvector)]
+    Store --> DB
+    Mindmap --> DB
+
+    DB -->|2. Render| Frontend[Mindmap Visualization]
+    Frontend -->|3. Click Node| NodeAPI[POST /nodes/:id/chat]
+    NodeAPI --> Retrieve[Get Node Chunks]
+    Retrieve --> RAG[Scoped RAG Query]
+    RAG -->|4. Stream Response| Answer[AI Answer]
+
     style API fill:#4CAF50
-    style SB fill:#3ECF8E
-    style OAI fill:#10A37F
-    style PG fill:#336791
+    style Mindmap fill:#2196F3
+    style NodeAPI fill:#FF9800
+    style DB fill:#9C27B0
 ```
 
 ## Features
 
-✅ **Full RAG Pipeline**
-- Document ingestion (PDF, TXT)
-- Intelligent text chunking with overlap
-- OpenAI embeddings (text-embedding-3-small)
-- Vector similarity search with pgvector (HNSW index)
-- Context-aware LLM responses
+**AI-Powered Document Analysis**
 
-✅ **Streaming Chat**
-- Server-Sent Events (SSE) for real-time responses
-- Conversation history management
-- Retrieved context tracking
+- Automatic topic extraction and hierarchical organization
+- Keyword identification for each concept
+- Intelligent relationship mapping
 
-✅ **Complete API**
-- Authentication (register, login, refresh)
-- Mindmap CRUD operations
-- Conversation management
-- Health check endpoint
+**Scoped RAG System**
 
-✅ **Production-Ready**
-- Rate limiting (tiered by operation type)
-- Input validation with Zod
-- Error handling and logging
-- Security headers (Helmet)
-- CORS configuration
+- Click any mindmap node → chat with that topic only
+- Higher precision answers through context scoping
+- Semantic chunk-to-node linking
+
+**Production Ready**
+
+- Supabase Storage for file persistence
+- PostgreSQL + pgvector for vector search
+- Row Level Security (RLS)
+- Rate limiting and authentication
 - TypeScript strict mode
+
+---
 
 ## Quick Start
 
 ### Prerequisites
 
 - Node.js 20+
-- Supabase account
+- Supabase project
 - OpenAI API key
 
 ### Installation
 
 ```bash
-# Install dependencies
 npm install
-
-# Setup environment
 cp .env.example .env
 # Edit .env with your credentials
 ```
@@ -84,13 +80,13 @@ cp .env.example .env
 
 ```env
 # Server
-PORT=5000
-NODE_ENV=development
+PORT=4000
+NODE_ENV=production
 
-# Supabase (get from https://supabase.com/dashboard)
+# Supabase
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your-anon-key
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-key
 
 # OpenAI
 OPENAI_API_KEY=sk-your-key
@@ -101,226 +97,331 @@ OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 CHUNK_SIZE=1000
 CHUNK_OVERLAP=200
 TOP_K_CHUNKS=5
-
-# Rate Limiting
-RATE_LIMIT_WINDOW_MS=900000
-RATE_LIMIT_MAX_REQUESTS=100
 ```
 
 ### Database Setup
 
-1. Run migrations in your Supabase SQL Editor:
+1. Run migrations in Supabase SQL Editor:
 
 ```bash
-# Copy and execute in order:
 src/db/migrations/0001_init.sql
 src/db/migrations/0002_rls.sql
 src/db/migrations/0003_ai.sql
 ```
 
-2. Enable pgvector extension (if not already enabled):
-```sql
-create extension if not exists vector;
-```
+2. Create storage bucket in Supabase Dashboard:
+   - Go to Storage → Create bucket
+   - Name: `documents`
+   - Public: false
 
-### Run Development Server
+### Run
 
 ```bash
+# Development
 npm run dev
-```
 
-Server will start on `http://localhost:5000`
-
-### Build for Production
-
-```bash
+# Production
 npm run build
 npm start
 ```
+
+---
 
 ## API Endpoints
 
 ### Authentication
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/auth/register` | Register new user |
-| POST | `/api/auth/login` | Login user |
-| POST | `/api/auth/refresh` | Refresh access token |
-| GET | `/api/auth/me` | Get current user |
+| Method | Endpoint             | Description       |
+| ------ | -------------------- | ----------------- |
+| POST   | `/api/auth/register` | Register new user |
+| POST   | `/api/auth/login`    | Login user        |
+| GET    | `/api/auth/me`       | Get current user  |
 
-### RAG
+### Mindmaps (Core Feature)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/ingest` | Upload & process document (PDF/text) |
-| POST | `/api/chat` | Chat with streaming (SSE) |
-| POST | `/api/query` | Query without streaming |
+| Method | Endpoint                               | Description                                |
+| ------ | -------------------------------------- | ------------------------------------------ |
+| POST   | `/api/mindmaps/create-from-pdf`        | **Upload PDF → Generate mindmap + chunks** |
+| POST   | `/api/mindmaps/:id/nodes/:nodeId/chat` | **Chat with specific node (scoped RAG)**   |
+| GET    | `/api/mindmaps`                        | List user mindmaps                         |
+| GET    | `/api/mindmaps/:id`                    | Get mindmap with full structure            |
+| PUT    | `/api/mindmaps/:id`                    | Update mindmap                             |
+| DELETE | `/api/mindmaps/:id`                    | Delete mindmap                             |
 
-### Conversations
+### RAG & Conversations
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/conversations` | List user conversations |
-| POST | `/api/conversations` | Create conversation |
-| GET | `/api/conversations/:id` | Get conversation with messages |
-| PUT | `/api/conversations/:id` | Update conversation |
-| DELETE | `/api/conversations/:id` | Delete conversation |
+| Method | Endpoint                 | Description                       |
+| ------ | ------------------------ | --------------------------------- |
+| POST   | `/api/chat`              | Chat with streaming (all context) |
+| POST   | `/api/query`             | Query without streaming           |
+| GET    | `/api/conversations`     | List conversations                |
+| GET    | `/api/conversations/:id` | Get conversation with messages    |
 
-### Mindmaps
+---
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/mindmaps` | List user mindmaps |
-| POST | `/api/mindmaps` | Create mindmap |
-| GET | `/api/mindmaps/:id` | Get mindmap with nodes |
-| PUT | `/api/mindmaps/:id` | Update mindmap |
-| DELETE | `/api/mindmaps/:id` | Delete mindmap |
+## Core Workflow
 
-## Deployment
+### 1. Upload PDF & Create Mindmap
 
-### Railway
+**Request:**
 
-```bash
-# Install Railway CLI
-npm i -g @railway/cli
+```http
+POST /api/mindmaps/create-from-pdf
+Authorization: Bearer {token}
+Content-Type: multipart/form-data
 
-# Login and deploy
-railway login
-railway init
-railway up
+file: document.pdf
+title: "Optional custom title"
 ```
 
-Add environment variables in Railway dashboard.
+**Response:**
 
-### Vercel
-
-```bash
-# Install Vercel CLI
-npm i -g vercel
-
-# Deploy
-vercel
-```
-
-Create `vercel.json`:
 ```json
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "dist/server.js",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "dist/server.js"
-    }
-  ]
+  "success": true,
+  "data": {
+    "id": "uuid",
+    "title": "Building Efficient SLM",
+    "file_id": "uuid",
+    "storage_url": "https://...signed-url",
+    "mindmap_data": {
+      "title": "Building Efficient SLM",
+      "central_topic": "Efficient Language Models",
+      "summary": "Overview of efficient SLM development...",
+      "nodes": [
+        {
+          "id": "node-0",
+          "label": "Efficient SLM Development",
+          "keywords": ["efficiency", "optimization", "performance"],
+          "level": 0,
+          "parent_id": null
+        },
+        {
+          "id": "node-1",
+          "label": "Model Architecture",
+          "keywords": ["transformer", "attention", "layers"],
+          "level": 1,
+          "parent_id": "node-0"
+        },
+        {
+          "id": "node-2",
+          "label": "Training Techniques",
+          "keywords": ["distillation", "pruning", "quantization"],
+          "level": 1,
+          "parent_id": "node-0"
+        }
+      ],
+      "edges": [
+        {
+          "from": "node-0",
+          "to": "node-1",
+          "relationship": "contains"
+        },
+        {
+          "from": "node-0",
+          "to": "node-2",
+          "relationship": "describes"
+        }
+      ]
+    },
+    "chunks_created": 45,
+    "nodes_count": 8,
+    "created_at": "2025-11-23T00:00:00Z"
+  }
 }
 ```
 
-### Render
+### 2. Chat with Node (Scoped RAG)
 
-1. Create new Web Service
-2. Connect your repository
-3. Build Command: `npm install && npm run build`
-4. Start Command: `npm start`
-5. Add environment variables in dashboard
+**Request:**
 
-### Docker
+```http
+POST /api/mindmaps/{mindmapId}/nodes/node-1/chat
+Authorization: Bearer {token}
+Content-Type: application/json
 
-```dockerfile
-FROM node:20-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY . .
-RUN npm run build
-EXPOSE 5000
-CMD ["npm", "start"]
+{
+  "question": "What are the key components of the model architecture?",
+  "stream": true
+}
 ```
 
-Build and run:
-```bash
-docker build -t rag-backend .
-docker run -p 5000:5000 --env-file .env rag-backend
+**Response (SSE):**
+
+```
+data: {"content": "Based on the Model Architecture section"}
+data: {"content": ", the key components include..."}
+data: [DONE]
 ```
 
-## Testing
+---
 
-Use the HTTP test file for manual testing:
+## Mindmap JSON Structure
 
-```bash
-# Open in VS Code with REST Client extension
-tests/api-tests.http
+Frontend receives this structure to render the visualization:
+
+```typescript
+interface MindmapData {
+  title: string;
+  central_topic: string;
+  summary?: string;
+  nodes: MindmapNode[];
+  edges: MindmapEdge[];
+}
+
+interface MindmapNode {
+  id: string; // "node-0", "node-1", etc.
+  label: string; // Topic name
+  keywords: string[]; // 3-7 relevant keywords
+  level: number; // 0 = center, 1+ = branches
+  parent_id: string | null; // Reference to parent
+}
+
+interface MindmapEdge {
+  from: string; // Source node ID
+  to: string; // Target node ID
+  relationship?: string; // "contains", "describes", etc.
+}
 ```
 
-Or use curl:
+**Example Frontend Integration:**
 
-```bash
-# Register
-curl -X POST http://localhost:5000/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"email":"test@example.com","password":"SecurePass123!"}'
+```typescript
+// 1. Upload PDF
+const formData = new FormData();
+formData.append("file", pdfFile);
 
-# Ingest document
-curl -X POST http://localhost:5000/api/ingest \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"text":"Your document content here"}'
+const { data } = await fetch("/api/mindmaps/create-from-pdf", {
+  method: "POST",
+  headers: { Authorization: `Bearer ${token}` },
+  body: formData,
+}).then((r) => r.json());
 
-# Chat (streaming)
-curl -N -X POST http://localhost:5000/api/chat \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"question":"What is in the document?","stream":true}'
+// 2. Render mindmap
+<MindmapVisualization
+  nodes={data.mindmap_data.nodes}
+  edges={data.mindmap_data.edges}
+  onNodeClick={(nodeId) => setSelectedNode(nodeId)}
+/>;
+
+// 3. Chat with selected node
+const response = await fetch(
+  `/api/mindmaps/${data.id}/nodes/${selectedNode}/chat`,
+  {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ question, stream: true }),
+  }
+);
+
+// 4. Handle SSE stream
+const reader = response.body.getReader();
+// ... process stream
 ```
 
-## Project Structure
+---
+
+## Architecture
+
+### Tech Stack
+
+- **Runtime**: Node.js 20+
+- **Framework**: Express.js 5
+- **Language**: TypeScript (strict)
+- **Database**: Supabase (PostgreSQL + pgvector)
+- **Vector Search**: pgvector with HNSW index
+- **AI**: OpenAI GPT-4 + text-embedding-3-small
+- **Storage**: Supabase Storage
+- **Security**: Helmet, CORS, RLS, Rate Limiting
+
+### Project Structure
 
 ```
 backend/
 ├── src/
-│   ├── config/           # Configuration (env, supabase, openai)
-│   ├── core/
-│   │   └── middlewares/  # Auth, validation, rate limiting, errors
+│   ├── config/           # Environment & API configs
 │   ├── db/
 │   │   └── migrations/   # SQL migration files
+│   ├── middlewares/      # Auth, validation, rate limiting
 │   ├── modules/
 │   │   ├── auth/         # Authentication
-│   │   ├── rag/          # RAG implementation
 │   │   ├── conversations/# Chat history
-│   │   └── mindmaps/     # Mindmap CRUD
-│   ├── utils/            # Helpers (errors, logger, chunking)
+│   │   ├── mindmaps/     # Mindmap CRUD & unified workflow
+│   │   └── rag/          # RAG chat endpoints
+│   ├── services/         # LLM, Storage, Embedding services
+│   ├── utils/            # Helpers, chunking, logging
 │   ├── app.ts            # Express setup
 │   └── server.ts         # Entry point
-├── tests/                # API tests
-└── docs/                 # Documentation
+└── tests/                # API test files
 ```
+
+---
+
+## How It Works
+
+### Semantic Chunk-to-Node Mapping
+
+1. **Generate Node Embeddings**: Combine node label + keywords
+2. **Compare with Chunks**: Calculate cosine similarity
+3. **Link Chunks**: Assign each chunk to top 2 matching nodes (threshold: 0.55)
+4. **Fallback**: Unmatched chunks → root node
+
+**Example:**
+
+```
+Node: "Model Architecture" + ["transformer", "attention"]
+Chunk: "The transformer uses multi-head attention..."
+Similarity: 0.78 ✓ → Linked!
+```
+
+### Vector Search
+
+Uses **pgvector** with **HNSW** index for fast similarity search:
+
+- Index type: `vector_cosine_ops`
+- Parameters: `m=16, ef_construction=64`
+- Search time: ~5ms for 10k+ chunks
+
+---
+
+## Production Deployment
+
+### Build
+
+```bash
+npm run build
+```
+
+### Environment
+
+Set `NODE_ENV=production` and configure CORS:
+
+```typescript
+// In production, set allowed origins
+CORS_ORIGIN=https://your-frontend.com
+```
+
+### Monitoring
+
+- Logs: Uses Pino for structured JSON logging
+- Errors: Centralized error handler with stack traces
+- Health: `GET /health` endpoint
+
+---
 
 ## Rate Limits
 
-| Operation | Limit |
-|-----------|-------|
-| General API | 100 requests / 15 min |
-| Authentication | 5 requests / 15 min |
-| Document Ingest | 10 requests / hour |
-| Chat/Query | 60 requests / hour |
+| Operation      | Limit            |
+| -------------- | ---------------- |
+| General API    | 100 req / 15 min |
+| Authentication | 5 req / 15 min   |
+| PDF Upload     | 10 req / hour    |
+| Chat/Query     | 60 req / hour    |
 
-## Technology Stack
-
-- **Runtime**: Node.js 20+
-- **Framework**: Express.js 5+
-- **Language**: TypeScript (strict mode)
-- **Database**: Supabase (PostgreSQL + pgvector)
-- **Vector Search**: pgvector with HNSW index
-- **AI**: OpenAI (GPT-4, text-embedding-3-small)
-- **Validation**: Zod
-- **Logging**: Pino
-- **Security**: Helmet, CORS, Rate Limiting
+---
 
 ## License
 
@@ -328,4 +429,6 @@ MIT
 
 ---
 
-**Need help?** Check out the [PLANNING.md](docs/PLANNING.md) for architectural details.
+## Support
+
+For issues or questions, create an issue in the repository.

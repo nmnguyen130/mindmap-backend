@@ -34,8 +34,9 @@ Authorization: Bearer {{accessToken}}
 
 ###
 
-### 4. Ingest Document (PDF File Upload)
-POST {{baseUrl}}/ingest
+### 4. Create Mindmap from PDF (Unified Workflow)
+# @name createMindmap
+POST {{baseUrl}}/mindmaps/create-from-pdf
 Authorization: Bearer {{accessToken}}
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
 
@@ -48,18 +49,31 @@ Content-Type: application/pdf
 
 ###
 
-### 4b. Ingest Document (Text Alternative)
-POST {{baseUrl}}/ingest
+### Mindmap ID
+@mindmapId = {{createMindmap.response.body.data.id}}
+
+###
+
+### 5. Get Mindmap Details
+GET {{baseUrl}}/mindmaps/{{mindmapId}}
+Authorization: Bearer {{accessToken}}
+
+###
+
+### 6. Chat with Specific Node (Scoped RAG)
+# Use node ID from mindmap_data.nodes (e.g., "node-1", "node-2")
+POST {{baseUrl}}/mindmaps/{{mindmapId}}/nodes/node-1/chat
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {
-  "text": "Neural networks are computing systems inspired by biological neural networks. They consist of interconnected nodes that process information."
+  "question": "Explain this topic in detail",
+  "stream": true
 }
 
 ###
 
-### 5. Create Conversation
+### 7. Create Conversation
 # @name createConversation
 POST {{baseUrl}}/conversations
 Authorization: Bearer {{accessToken}}
@@ -76,7 +90,7 @@ Content-Type: application/json
 
 ###
 
-### 6. Chat
+### 8. Chat (General - All Context)
 POST {{baseUrl}}/chat
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
@@ -88,25 +102,8 @@ Content-Type: application/json
 
 ###
 
-### 7. Get Conversation
+### 9. Get Conversation
 GET {{baseUrl}}/conversations/{{conversationId}}
-Authorization: Bearer {{accessToken}}
-
-###
-
-### 8. Create Mindmap
-POST {{baseUrl}}/mindmaps
-Authorization: Bearer {{accessToken}}
-Content-Type: application/json
-
-{
-  "title": "Test Mindmap"
-}
-
-###
-
-### 9. List Conversations
-GET {{baseUrl}}/conversations
 Authorization: Bearer {{accessToken}}
 
 ###
@@ -117,7 +114,13 @@ Authorization: Bearer {{accessToken}}
 
 ###
 
-### 11. Update Conversation
+### 11. List Conversations
+GET {{baseUrl}}/conversations
+Authorization: Bearer {{accessToken}}
+
+###
+
+### 12. Update Conversation
 PUT {{baseUrl}}/conversations/{{conversationId}}
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
@@ -128,7 +131,7 @@ Content-Type: application/json
 
 ###
 
-### 12. Query
+### 13. Query (Non-streaming)
 POST {{baseUrl}}/query
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
@@ -137,3 +140,16 @@ Content-Type: application/json
   "question": "What is AI?",
   "stream": false
 }
+
+###
+
+### 14. Create Empty Mindmap
+POST {{baseUrl}}/mindmaps
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "title": "Manual Mindmap"
+}
+
+###
