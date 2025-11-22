@@ -10,7 +10,7 @@ create table if not exists public.document_chunks (
   file_id uuid not null references public.files(id) on delete cascade,
   mindmap_id uuid references public.mindmaps(id) on delete cascade,
   content text not null,
-  embedding vector(1536),  -- OpenAI ada-002 dimension
+  embedding vector(384),  -- all-MiniLM-L6-v2 dimension (local model)
   start_page integer,
   end_page integer,
   chunk_index integer not null,
@@ -102,7 +102,7 @@ create policy "messages delete" on public.messages for delete
   using (exists (select 1 from public.conversations c where c.id = conversation_id and c.user_id = auth.uid()));
 
 -- Function to find similar chunks
-create or replace function find_similar_chunks(query_embedding vector(1536), file_id uuid default null, mindmap_id uuid default null, top_k int default 5)
+create or replace function find_similar_chunks(query_embedding vector(384), file_id uuid default null, mindmap_id uuid default null, top_k int default 5)
 returns table(id uuid, content text, similarity float, chunk_index int)
 language plpgsql
 security definer
@@ -140,4 +140,4 @@ end;
 $$;
 
 -- Grant execute to authenticated users
-grant execute on function find_similar_chunks(vector(1536), uuid, uuid, int) to authenticated;
+grant execute on function find_similar_chunks(vector(384), uuid, uuid, int) to authenticated;

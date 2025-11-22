@@ -23,6 +23,9 @@ create table if not exists public.mindmap_nodes (
   updated_at timestamptz not null default now()
 );
 
+-- Enable required extensions
+create extension if not exists pg_trgm;
+
 -- Indexes
 create index if not exists idx_nodes_mindmap on public.mindmap_nodes(mindmap_id);
 create index if not exists idx_nodes_text on public.mindmap_nodes using gin (text gin_trgm_ops);
@@ -33,7 +36,7 @@ create index if not exists idx_nodes_mindmap_parent on public.mindmap_nodes(mind
 create table if not exists public.files (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
-  path text not null unique,
+  path text not null,
   created_at timestamptz not null default now()
 );
 

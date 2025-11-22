@@ -7,10 +7,10 @@ export const openai = new OpenAI({
 });
 
 // Configuration constants
+// Note: Embeddings are now generated locally using all-MiniLM-L6-v2 (384 dimensions)
+// See src/services/embedding.service.ts
 export const OPENAI_CONFIG = {
     chatModel: env.OPENAI_MODEL,
-    embeddingModel: env.OPENAI_EMBEDDING_MODEL,
-    embeddingDimensions: 1536, // text-embedding-3-small default
     maxTokens: 2000,
     temperature: 0.7,
 } as const;

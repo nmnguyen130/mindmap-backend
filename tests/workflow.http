@@ -24,7 +24,7 @@ Content-Type: application/json
 ###
 
 ### Auth Token
-@accessToken = {{login.response.body.data.accessToken}}
+@accessToken = {{login.response.body.data.access_token}}
 
 ###
 
@@ -34,18 +34,33 @@ Authorization: Bearer {{accessToken}}
 
 ###
 
-### 4. Ingest Document
+### 4. Ingest Document (PDF File Upload)
+POST {{baseUrl}}/ingest
+Authorization: Bearer {{accessToken}}
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="file"; filename="Building_Efficient_SLM.pdf"
+Content-Type: application/pdf
+
+< ./Building_Efficient_SLM.pdf
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+###
+
+### 4b. Ingest Document (Text Alternative)
 POST {{baseUrl}}/ingest
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {
-  "text": "Neural networks are computing systems."
+  "text": "Neural networks are computing systems inspired by biological neural networks. They consist of interconnected nodes that process information."
 }
 
 ###
 
 ### 5. Create Conversation
+# @name createConversation
 POST {{baseUrl}}/conversations
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
@@ -53,6 +68,11 @@ Content-Type: application/json
 {
   "title": "AI Discussion"
 }
+
+###
+
+### Conversation Id
+@conversationId = {{createConversation.response.body.data.id}}
 
 ###
 
@@ -69,7 +89,7 @@ Content-Type: application/json
 ###
 
 ### 7. Get Conversation
-GET {{baseUrl}}/conversations/CONVERSATION_ID_HERE
+GET {{baseUrl}}/conversations/{{conversationId}}
 Authorization: Bearer {{accessToken}}
 
 ###
@@ -98,7 +118,7 @@ Authorization: Bearer {{accessToken}}
 ###
 
 ### 11. Update Conversation
-PUT {{baseUrl}}/conversations/CONVERSATION_ID_HERE
+PUT {{baseUrl}}/conversations/{{conversationId}}
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 

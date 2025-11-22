@@ -6,16 +6,17 @@ POST {{baseUrl}}/auth/login
 Content-Type: application/json
 
 {
-  "email": "test@example.com",
-  "password": "TestPassword123!"
+  "email": "test@gmail.com",
+  "password": "Password123!"
 }
 
 ### Auth Token
-@accessToken = {{login.response.body.data.accessToken}}
+@accessToken = {{login.response.body.data.access_token}}
 
 ###
 
 ### 2. Create Conversation
+# @name createConversation
 POST {{baseUrl}}/conversations
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
@@ -26,6 +27,11 @@ Content-Type: application/json
 
 ###
 
+### Conversation Id
+@conversationId = {{createConversation.response.body.data.id}}
+
+###
+
 ### 3. List Conversations
 GET {{baseUrl}}/conversations
 Authorization: Bearer {{accessToken}}
@@ -33,13 +39,13 @@ Authorization: Bearer {{accessToken}}
 ###
 
 ### 4. Get Conversation
-GET {{baseUrl}}/conversations/CONVERSATION_ID_HERE
+GET {{baseUrl}}/conversations/{{conversationId}}
 Authorization: Bearer {{accessToken}}
 
 ###
 
 ### 5. Update Conversation
-PUT {{baseUrl}}/conversations/CONVERSATION_ID_HERE
+PUT {{baseUrl}}/conversations/{{conversationId}}
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
@@ -50,5 +56,5 @@ Content-Type: application/json
 ###
 
 ### 6. Delete Conversation
-DELETE {{baseUrl}}/conversations/CONVERSATION_ID_HERE
+DELETE {{baseUrl}}/conversations/{{conversationId}}
 Authorization: Bearer {{accessToken}}

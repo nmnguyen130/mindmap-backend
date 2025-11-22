@@ -6,18 +6,19 @@ POST {{baseUrl}}/auth/login
 Content-Type: application/json
 
 {
-  "email": "test@example.com",
-  "password": "TestPassword123!"
+  "email": "test@gmail.com",
+  "password": "Password123!"
 }
 
 ###
 
 ### Auth Token
-@accessToken = {{login.response.body.data.accessToken}}
+@accessToken = {{login.response.body.data.access_token}}
 
 ###
 
 ### 2. Create Mindmap
+# @name createMindmap
 POST {{baseUrl}}/mindmaps
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
@@ -28,6 +29,11 @@ Content-Type: application/json
 
 ###
 
+### Mindmap Id
+@mindmapId = {{createMindmap.response.body.data.id}}
+
+###
+
 ### 3. List Mindmaps
 GET {{baseUrl}}/mindmaps
 Authorization: Bearer {{accessToken}}
@@ -35,13 +41,13 @@ Authorization: Bearer {{accessToken}}
 ###
 
 ### 4. Get Mindmap
-GET {{baseUrl}}/mindmaps/MINDMAP_ID_HERE
+GET {{baseUrl}}/mindmaps/{{mindmapId}}
 Authorization: Bearer {{accessToken}}
 
 ###
 
 ### 5. Update Mindmap
-PUT {{baseUrl}}/mindmaps/MINDMAP_ID_HERE
+PUT {{baseUrl}}/mindmaps/{{mindmapId}}
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
@@ -52,5 +58,5 @@ Content-Type: application/json
 ###
 
 ### 6. Delete Mindmap
-DELETE {{baseUrl}}/mindmaps/MINDMAP_ID_HERE
+DELETE {{baseUrl}}/mindmaps/{{mindmapId}}
 Authorization: Bearer {{accessToken}}

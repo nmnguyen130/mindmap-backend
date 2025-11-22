@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/config/supabase';
 import { openai, OPENAI_CONFIG } from '@/config/openai';
 import { env } from '@/config/env';
+import { EmbeddingService } from '@/services/embedding.service';
 import { chunkTextBySentence } from '@/utils/chunking';
 import { NotFoundError, ValidationError } from '@/utils/errors';
 import { logger } from '@/utils/logger';
@@ -33,8 +34,30 @@ export const ingestDocument = async (params: {
     // Extract text from PDF if file provided
     if (fileBuffer && fileName) {
         if (fileName.endsWith('.pdf')) {
-            const pdfData = await pdfParse(fileBuffer);
-            content = pdfData.text;
+            // Suppress pdf-parse warnings by intercepting stdout
+            const originalWrite = process.stdout.write;
+
+            // Intercept stdout writes to filter pdf-parse warnings
+            process.stdout.write = ((chunk: any, encoding?: any, callback?: any): boolean => {
+                const message = chunk.toString();
+                // Filter out pdf-parse warning messages
+                if (message.includes('TT: CALL') || message.includes('Info:')) {
+                    if (typeof encoding === 'function') {
+                        encoding(); // callback
+                    } else if (typeof callback === 'function') {
+                        callback();
+                    }
+                    return true;
+                }
+                return originalWrite.call(process.stdout, chunk, encoding, callback);
+            }) as any;
+
+            try {
+                const pdfData = await pdfParse(fileBuffer);
+                content = pdfData.text;
+            } finally {
+                process.stdout.write = originalWrite; // Restore stdout
+            }
         } else if (fileName.endsWith('.txt')) {
             content = fileBuffer.toString('utf-8');
         } else {
@@ -69,28 +92,17 @@ export const ingestDocument = async (params: {
 
     logger.info(`Created ${chunks.length} chunks from document`);
 
-    // Generate embeddings for all chunks
-    const embeddingPromises = chunks.map(async (chunk: string, index: number) => {
-        const embeddingResponse = await openai.embeddings.create({
-            model: OPENAI_CONFIG.embeddingModel,
-            input: chunk,
-        });
+    // Generate embeddings for all chunks using batch processing (optimized)
+    const embeddings = await EmbeddingService.generateEmbeddings(chunks);
 
-        const embedding = embeddingResponse.data[0]?.embedding;
-        if (!embedding) {
-            throw new Error('Failed to generate embedding');
-        }
-
-        return {
-            file_id: fileData.id,
-            mindmap_id: mindmapId || null,
-            content: chunk,
-            embedding: JSON.stringify(embedding),
-            chunk_index: index,
-        };
-    });
-
-    const chunksWithEmbeddings = await Promise.all(embeddingPromises);
+    // Combine chunks with their embeddings
+    const chunksWithEmbeddings = chunks.map((chunk: string, index: number) => ({
+        file_id: fileData.id,
+        mindmap_id: mindmapId || null,
+        content: chunk,
+        embedding: JSON.stringify(embeddings[index]),
+        chunk_index: index,
+    }));
 
     // Store chunks in database
     const { error: insertError } = await supabaseAdmin
@@ -119,16 +131,8 @@ export const retrieveRelevantChunks = async (
     fileId?: string,
     mindmapId?: string
 ): Promise<Array<{ id: string; content: string; similarity: number }>> => {
-    // Generate embedding for question
-    const embeddingResponse = await openai.embeddings.create({
-        model: OPENAI_CONFIG.embeddingModel,
-        input: question,
-    });
-
-    const questionEmbedding = embeddingResponse.data[0]?.embedding;
-    if (!questionEmbedding) {
-        throw new Error('Failed to generate question embedding');
-    }
+    // Generate embedding for question using local model
+    const questionEmbedding = await EmbeddingService.generateEmbedding(question);
 
     // Build query to find similar chunks
     let query = supabaseAdmin

@@ -13,10 +13,10 @@ const envSchema = z.object({
     SUPABASE_ANON_KEY: z.string().min(1, { error: 'Supabase anon key is required' }),
     SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, { error: 'Supabase service role key is required' }),
 
-    // OpenAI / OpenRouter
-    OPENAI_API_KEY: z.string().min(1, { error: 'OpenAI/OpenRouter API key is required' }),
+    // OpenAI / OpenRouter (only needed for chat completions)
+    // Embeddings are now generated locally using Transformers.js
+    OPENAI_API_KEY: z.string().optional().default('not-needed-for-embeddings'),
     OPENAI_MODEL: z.string().default('gpt-4-turbo-preview'),
-    OPENAI_EMBEDDING_MODEL: z.string().default('text-embedding-3-small'),
     OPENROUTER_BASE_URL: z.url().optional().default('https://openrouter.ai/api/v1'),
 
     // RAG Configuration
