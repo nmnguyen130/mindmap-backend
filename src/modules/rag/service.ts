@@ -5,7 +5,7 @@ import { EmbeddingService } from '@/services/embedding.service';
 import { chunkTextBySentence } from '@/utils/chunking';
 import { NotFoundError, ValidationError } from '@/utils/errors';
 import { logger } from '@/utils/logger';
-import pdfParse from 'pdf-parse-new';
+import { cosineSimilarity } from '@/utils/similarity';
 
 interface IngestResult {
     file_id: string;
@@ -31,39 +31,15 @@ export const ingestDocument = async (params: {
 
     let content = text || '';
 
-    // Extract text from PDF if file provided
+    // Extract text from file if provided
     if (fileBuffer && fileName) {
-        if (fileName.endsWith('.pdf')) {
-            // Suppress pdf-parse warnings by intercepting stdout
-            const originalWrite = process.stdout.write;
-
-            // Intercept stdout writes to filter pdf-parse warnings
-            process.stdout.write = ((chunk: any, encoding?: any, callback?: any): boolean => {
-                const message = chunk.toString();
-                // Filter out pdf-parse warning messages
-                if (message.includes('TT: CALL') || message.includes('Info:')) {
-                    if (typeof encoding === 'function') {
-                        encoding(); // callback
-                    } else if (typeof callback === 'function') {
-                        callback();
-                    }
-                    return true;
-                }
-                return originalWrite.call(process.stdout, chunk, encoding, callback);
-            }) as any;
-
-            try {
-                const pdfData = await pdfParse(fileBuffer);
-                content = pdfData.text;
-            } finally {
-                process.stdout.write = originalWrite; // Restore stdout
-            }
-        } else if (fileName.endsWith('.txt')) {
+        if (fileName.endsWith('.txt')) {
             content = fileBuffer.toString('utf-8');
         } else {
-            throw new ValidationError('Only PDF and TXT files are supported');
+            throw new ValidationError('Only TXT files supported. For PDFs, use POST /api/mindmaps/create-from-pdf');
         }
     }
+
 
     if (!content || content.trim().length === 0) {
         throw new ValidationError('No content to ingest');
@@ -330,22 +306,3 @@ ${context}`,
     // Save assistant message
     await saveMessage(convId, 'assistant', fullResponse);
 };
-
-/**
- * Cosine similarity calculation
- */
-function cosineSimilarity(vecA: number[], vecB: number[]): number {
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-
-    for (let i = 0; i < vecA.length; i++) {
-        const a = vecA[i]!;
-        const b = vecB[i]!;
-        dotProduct += a * b;
-        normA += a * a;
-        normB += b * b;
-    }
-
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-}

@@ -1,7 +1,7 @@
 -- Enable pgvector extension for AI embeddings
 create extension if not exists vector;
 
--- Document chunks with embeddings for RAG
+-- Document chunks with embeddings for RAG (Production 2025: Structured Chunking)
 create table if not exists public.document_chunks (
   id uuid primary key default gen_random_uuid(),
   file_id uuid not null references public.files(id) on delete cascade,
@@ -12,6 +12,16 @@ create table if not exists public.document_chunks (
   start_page integer,
   end_page integer,
   chunk_index integer not null,
+  
+  -- Structured chunking metadata (Structure → Semantic → Window)
+  section_heading text,  -- H1/H2/H3 heading this chunk belongs to
+  parent_section text,   -- Parent heading for nested sections
+  hierarchy_level integer default 0,  -- 1=H1, 2=H2, 3=H3, etc.
+  chunk_type text default 'legacy' check (chunk_type in ('legacy', 'section', 'semantic', 'window')),
+  window_before text,    -- Context from previous chunk
+  window_after text,     -- Context from next chunk
+  metadata jsonb default '{}'::jsonb,  -- Additional structured metadata
+  
   created_at timestamptz not null default now()
 );
 
@@ -43,6 +53,9 @@ create index if not exists idx_document_chunks_node on public.document_chunks(no
 create index if not exists idx_document_chunks_content on public.document_chunks using gin(to_tsvector('english', content));
 create index if not exists idx_document_chunks_embedding on public.document_chunks 
   using hnsw (embedding vector_cosine_ops) with (m = 16, ef_construction = 64);
+-- Structured chunking indexes
+create index if not exists idx_document_chunks_hierarchy on public.document_chunks(mindmap_id, hierarchy_level, chunk_index);
+create index if not exists idx_document_chunks_section on public.document_chunks(mindmap_id, section_heading);
 create index if not exists idx_conversations_user on public.conversations(user_id);
 create index if not exists idx_messages_conversation on public.messages(conversation_id);
 

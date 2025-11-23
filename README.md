@@ -7,29 +7,31 @@ Production-ready backend for an intelligent document analysis system. Upload PDF
 ```mermaid
 flowchart TB
     User[Client] -->|1. Upload PDF| API[POST /mindmaps/create-from-pdf]
-
+    
+    API -->|PDF Buffer| Python[Python Microservice]
+    Python -->|PDF to Markdown| Parse[Markdown Content]
     API --> Store[Supabase Storage]
-    API --> Parse[PDF Text Extraction]
-
+    
     Parse --> LLM[OpenAI GPT-4]
     LLM --> Mindmap[AI Mindmap Generation]
-
-    Parse --> Chunk[Document Chunking]
-    Chunk --> Embed[Generate Embeddings]
-
+    
+    Parse --> Chunk[Structure→Semantic→Window Pipeline]
+    Chunk --> Embed[Local Embeddings<br/>all-MiniLM-L6-v2]
+    
     Mindmap --> Map[Semantic Chunk-to-Node Mapping]
     Embed --> Map
-
+    
     Map --> DB[(PostgreSQL + pgvector)]
     Store --> DB
     Mindmap --> DB
-
+    
     DB -->|2. Render| Frontend[Mindmap Visualization]
     Frontend -->|3. Click Node| NodeAPI[POST /nodes/:id/chat]
     NodeAPI --> Retrieve[Get Node Chunks]
     Retrieve --> RAG[Scoped RAG Query]
     RAG -->|4. Stream Response| Answer[AI Answer]
-
+    
+    style Python fill:#FFD700
     style API fill:#4CAF50
     style Mindmap fill:#2196F3
     style NodeAPI fill:#FF9800
@@ -43,6 +45,7 @@ flowchart TB
 - Automatic topic extraction and hierarchical organization
 - Keyword identification for each concept
 - Intelligent relationship mapping
+
 
 **Scoped RAG System**
 
@@ -333,7 +336,8 @@ const reader = response.body.getReader();
 - **Language**: TypeScript (strict)
 - **Database**: Supabase (PostgreSQL + pgvector)
 - **Vector Search**: pgvector with HNSW index
-- **AI**: OpenAI GPT-4 + text-embedding-3-small
+- **AI**: OpenAI GPT-4 for chat, local all-MiniLM-L6-v2 for embeddings
+- **PDF Processing**: Python microservice (pdf2md)
 - **Storage**: Supabase Storage
 - **Security**: Helmet, CORS, RLS, Rate Limiting
 
@@ -351,10 +355,11 @@ backend/
 │   │   ├── conversations/# Chat history
 │   │   ├── mindmaps/     # Mindmap CRUD & unified workflow
 │   │   └── rag/          # RAG chat endpoints
-│   ├── services/         # LLM, Storage, Embedding services
-│   ├── utils/            # Helpers, chunking, logging
+│   ├── services/         # LLM, Storage, Embedding, Python client
+│   ├── utils/            # Similarity, chunking, logging
 │   ├── app.ts            # Express setup
 │   └── server.ts         # Entry point
+├── python-service/       # PDF to Markdown microservice
 └── tests/                # API test files
 ```
 

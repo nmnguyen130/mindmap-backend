@@ -1,3 +1,14 @@
+-- Files table
+create table if not exists public.files (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  path text not null,
+  storage_path text,
+  file_size bigint,
+  mime_type text default 'application/pdf',
+  created_at timestamptz not null default now()
+);
+
 -- Mindmaps core table
 create table if not exists public.mindmaps (
   id uuid primary key default gen_random_uuid(),
@@ -34,17 +45,6 @@ create index if not exists idx_nodes_text on public.mindmap_nodes using gin (tex
 create index if not exists idx_nodes_parent on public.mindmap_nodes(parent_id);
 create index if not exists idx_nodes_mindmap_parent on public.mindmap_nodes(mindmap_id, parent_id);
 create index if not exists idx_mindmaps_data on public.mindmaps using gin(mindmap_data);
-
--- Files table
-create table if not exists public.files (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  path text not null,
-  storage_path text,
-  file_size bigint,
-  mime_type text default 'application/pdf',
-  created_at timestamptz not null default now()
-);
 
 -- AI analyses table
 create table if not exists public.mindmap_analyses (

@@ -19,14 +19,20 @@ const envSchema = z.object({
     OPENAI_MODEL: z.string().default('gpt-4-turbo-preview'),
     OPENROUTER_BASE_URL: z.url().optional().default('https://openrouter.ai/api/v1'),
 
-    // RAG Configuration
+    // RAG Configuration (Production 2025: Structured Chunking)
     CHUNK_SIZE: z.string().default('1000').transform(Number),
     CHUNK_OVERLAP: z.string().default('200').transform(Number),
     TOP_K_CHUNKS: z.string().default('5').transform(Number),
+    MIN_SECTION_SIZE: z.string().default('200').transform(Number),
+    SEMANTIC_THRESHOLD: z.string().default('1500').transform(Number),
+    ENABLE_WINDOW_CONTEXT: z.string().default('true').transform((v) => v === 'true'),
 
     // Rate Limiting
     RATE_LIMIT_WINDOW_MS: z.string().default('900000').transform(Number),
     RATE_LIMIT_MAX_REQUESTS: z.string().default('100').transform(Number),
+
+    // Python Microservice
+    PYTHON_SERVICE_URL: z.url().default('http://localhost:5000'),
 });
 
 export type Env = z.infer<typeof envSchema>;
