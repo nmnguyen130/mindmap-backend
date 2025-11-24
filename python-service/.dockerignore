@@ -1,0 +1,47 @@
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv
+.venv
+
+# Build artifacts
+build
+dist
+*.egg-info
+.eggs
+
+# Testing
+.pytest_cache
+
+# IDE & OS
+.vscode
+.idea
+*.swp
+.DS_Store
+
+# Version control
+.git
+.gitignore
+
+# Docker files
+Dockerfile*
+.dockerignore
+
+# Environment
+.env*
+!.env.example
+
+# Documentation
+*.md
+
+# Jupyter
+.ipynb_checkpoints
+*.ipynb
+
+# Logs
+*.log
+logs
