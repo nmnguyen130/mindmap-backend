@@ -1,4 +1,4 @@
-import { supabaseAdmin } from '@/config/supabase';
+import { SupabaseClient } from '@supabase/supabase-js';
 import { openai, OPENAI_CONFIG } from '@/config/openai';
 import { env } from '@/config/env';
 import { EmbeddingService } from '@/services/embedding.service';
@@ -20,15 +20,15 @@ interface ChatMessage {
 
 /**
  * Ingest PDF document: extract text, chunk, generate embeddings, store in DB
- * @[src/modules/rag/service.ts]
  */
 export const ingestPdfDocument = async (params: {
     userId: string;
     fileBuffer: Buffer;
     fileName: string;
     mindmapId?: string;
+    supabase: SupabaseClient;
 }): Promise<IngestResult> => {
-    const { userId, fileBuffer, fileName, mindmapId } = params;
+    const { userId, fileBuffer, fileName, mindmapId, supabase } = params;
 
     if (!fileName.toLowerCase().endsWith('.pdf')) {
         throw new ValidationError('Only PDF files are supported');
@@ -47,7 +47,7 @@ export const ingestPdfDocument = async (params: {
         logger.info(`Extracted ${fullText.length} characters from ${pdfData.numpages} pages`);
 
         // Create file record
-        const { data: fileData, error: fileError } = await supabaseAdmin
+        const { data: fileData, error: fileError } = await supabase
             .from('files')
             .insert({
                 user_id: userId,
@@ -86,7 +86,7 @@ export const ingestPdfDocument = async (params: {
         }));
 
         // Store chunks in database
-        const { error: insertError } = await supabaseAdmin
+        const { error: insertError } = await supabase
             .from('document_chunks')
             .insert(chunksWithEmbeddings);
 
@@ -116,15 +116,16 @@ export const ingestDocument = async (params: {
     fileBuffer?: Buffer;
     fileName?: string;
     mindmapId?: string;
+    supabase: SupabaseClient;
 }): Promise<IngestResult> => {
-    const { userId, text, fileBuffer, fileName, mindmapId } = params;
+    const { userId, text, fileBuffer, fileName, mindmapId, supabase } = params;
 
     let content = text || '';
 
     // Route to PDF ingestion if PDF file
     if (fileBuffer && fileName) {
         if (fileName.toLowerCase().endsWith('.pdf')) {
-            return ingestPdfDocument({ userId, fileBuffer, fileName, mindmapId });
+            return ingestPdfDocument({ userId, fileBuffer, fileName, mindmapId, supabase });
         } else if (fileName.endsWith('.txt')) {
             content = fileBuffer.toString('utf-8');
         } else {
@@ -137,7 +138,7 @@ export const ingestDocument = async (params: {
     }
 
     // Create file record
-    const { data: fileData, error: fileError } = await supabaseAdmin
+    const { data: fileData, error: fileError } = await supabase
         .from('files')
         .insert({
             user_id: userId,
@@ -172,7 +173,7 @@ export const ingestDocument = async (params: {
     }));
 
     // Store chunks
-    const { error: insertError } = await supabaseAdmin
+    const { error: insertError } = await supabase
         .from('document_chunks')
         .insert(chunksWithEmbeddings);
 
@@ -195,13 +196,14 @@ export const ingestDocument = async (params: {
 export const retrieveRelevantChunks = async (
     question: string,
     userId: string,
-    fileId?: string,
-    mindmapId?: string
+    fileId: string | undefined,
+    mindmapId: string | undefined,
+    supabase: SupabaseClient
 ): Promise<Array<{ id: string; content: string; similarity: number }>> => {
     const questionEmbedding = await EmbeddingService.generateEmbedding(question);
     const embeddingArray = `[${questionEmbedding.join(',')}]`;
 
-    const { data: chunks, error } = await supabaseAdmin
+    const { data: chunks, error } = await supabase
         .rpc('find_similar_chunks', {
             query_embedding: embeddingArray,
             file_id: fileId || null,
@@ -230,9 +232,10 @@ export const retrieveRelevantChunks = async (
  */
 export const getConversationHistory = async (
     conversationId: string,
-    userId: string
+    userId: string,
+    supabase: SupabaseClient
 ): Promise<ChatMessage[]> => {
-    const { data: messages, error } = await supabaseAdmin
+    const { data: messages, error } = await supabase
         .from('messages')
         .select('role, content')
         .eq('conversation_id', conversationId)
@@ -253,9 +256,10 @@ export const saveMessage = async (
     conversationId: string,
     role: 'user' | 'assistant',
     content: string,
-    metadata?: Record<string, any>
+    metadata: Record<string, any> | undefined,
+    supabase: SupabaseClient
 ): Promise<void> => {
-    const { error } = await supabaseAdmin.from('messages').insert({
+    const { error } = await supabase.from('messages').insert({
         conversation_id: conversationId,
         role,
         content,
@@ -273,10 +277,11 @@ export const saveMessage = async (
  */
 export const getOrCreateConversation = async (
     userId: string,
-    conversationId?: string
+    conversationId: string | undefined,
+    supabase: SupabaseClient
 ): Promise<string> => {
     if (conversationId) {
-        const { data, error } = await supabaseAdmin
+        const { data, error } = await supabase
             .from('conversations')
             .select('id')
             .eq('id', conversationId)
@@ -291,7 +296,7 @@ export const getOrCreateConversation = async (
     }
 
     // Create new conversation
-    const { data, error } = await supabaseAdmin
+    const { data, error } = await supabase
         .from('conversations')
         .insert({
             user_id: userId,
@@ -314,25 +319,27 @@ export const getOrCreateConversation = async (
 export const generateChatCompletion = async function* (
     question: string,
     userId: string,
-    conversationId?: string,
-    fileId?: string,
-    mindmapId?: string
+    conversationId: string | undefined,
+    fileId: string | undefined,
+    mindmapId: string | undefined,
+    supabase: SupabaseClient
 ): AsyncGenerator<string, void, unknown> {
-    const convId = await getOrCreateConversation(userId, conversationId);
+    const convId = await getOrCreateConversation(userId, conversationId, supabase);
 
     // Retrieve relevant chunks
     const relevantChunks = await retrieveRelevantChunks(
         question,
         userId,
         fileId,
-        mindmapId
+        mindmapId,
+        supabase
     );
 
     // Get conversation history
-    const history = await getConversationHistory(convId, userId);
+    const history = await getConversationHistory(convId, userId, supabase);
 
     // Build context from chunks
-    const context = relevantChunks.map((chunk) => chunk.content).join('\n\n');
+    const context = relevantChunks.map((chunk) => chunk.content).join('\\n\\n');
 
     // Build messages for OpenAI
     const messages: ChatMessage[] = [
@@ -353,7 +360,7 @@ ${context}`,
     // Save user message
     await saveMessage(convId, 'user', question, {
         relevant_chunks: relevantChunks.map((c) => ({ id: c.id, similarity: c.similarity })),
-    });
+    }, supabase);
 
     // Stream response from OpenAI
     const stream = await openai.chat.completions.create({
@@ -375,5 +382,5 @@ ${context}`,
     }
 
     // Save assistant message
-    await saveMessage(convId, 'assistant', fullResponse);
+    await saveMessage(convId, 'assistant', fullResponse, undefined, supabase);
 };

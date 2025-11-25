@@ -62,7 +62,7 @@ Authorization: Bearer {{accessToken}}
 
 ### 6. Chat with Specific Node (Scoped RAG)
 # Use node ID from mindmap_data.nodes (e.g., "node-1", "node-2")
-POST {{baseUrl}}/mindmaps/{{mindmapId}}/nodes/node-1/chat
+POST {{baseUrl}}/mindmaps/d2711214-67c0-4541-8c06-ef2764b3f7ca/nodes/node-1/chat
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 

@@ -11,18 +11,10 @@ export interface AuthResult {
     };
 }
 
-export interface UserInfo {
-    id: string;
-    email: string;
-}
-
 /**
  * Register new user
  */
-export const register = async (
-    email: string,
-    password: string
-): Promise<AuthResult> => {
+export const register = async (email: string, password: string): Promise<AuthResult> => {
     const { data, error } = await supabase.auth.signUp({
         email,
         password,
@@ -104,7 +96,7 @@ export const refreshToken = async (refreshToken: string): Promise<AuthResult> =>
 /**
  * Get current user info
  */
-export const getCurrentUser = async (accessToken: string): Promise<UserInfo> => {
+export const getCurrentUser = async (accessToken: string) => {
     const { data, error } = await supabase.auth.getUser(accessToken);
 
     if (error || !data.user) {

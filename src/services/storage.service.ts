@@ -3,7 +3,14 @@ import { logger } from '@/utils/logger';
 
 /**
  * Supabase Storage Service
- * Handles file uploads, downloads, and management in Supabase Storage
+ * 
+ * **IMPORTANT**: This service uses `supabaseAdmin` (service role) because:
+ * 1. Supabase Storage operations require service role authentication
+ * 2. Storage buckets use their own bucket policies, NOT Row Level Security (RLS)
+ * 3. File uploads/downloads need to bypass RLS to access the storage bucket directly
+ * 
+ * This is an exception to the general rule of using authenticated clients.
+ * All other database queries should use `createSupabaseClient(accessToken)`.
  */
 
 const STORAGE_BUCKET = 'documents';

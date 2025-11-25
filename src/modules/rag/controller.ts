@@ -1,6 +1,5 @@
-import { Response, NextFunction } from 'express';
+import { Response } from 'express';
 import { AuthRequest } from '@/middlewares/auth';
-import { supabaseAdmin } from '@/config/supabase';
 import * as ragService from './service';
 import { success } from '@/utils/response';
 import { ChatInput } from './schemas';
@@ -9,37 +8,31 @@ import { ChatInput } from './schemas';
  * POST /api/chat
  * Chat with RAG context (streaming)
  */
-export const chat = async (
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> => {
-    try {
-        const body = req.body as ChatInput;
-        const userId = req.user!.id;
+export const chat = async (req: AuthRequest, res: Response) => {
+    const { user, accessToken } = req;
+    const body = req.body as ChatInput;
 
-        // Set headers for SSE
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
+    // Set headers for SSE
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
 
-        const stream = ragService.generateChatCompletion(
-            body.question,
-            userId,
-            undefined,
-            body.file_id,
-            body.mindmap_id
-        );
+    const stream = ragService.generateChatCompletion({
+        userId: user.id,
+        accessToken,
+        question: body.question,
+        conversationId: undefined,
+        file_id: body.file_id,
+        mindmap_id: body.mindmap_id,
+    });
 
-        for await (const chunk of stream) {
-            res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
-        }
-
-        res.write('data: [DONE]\n\n');
-        res.end();
-    } catch (error) {
-        next(error);
+    for await (const chunk of stream) {
+        res.write(`data: ${JSON.stringify({ content: chunk })}\\n\\n`);
     }
+
+    res.write('data: [DONE]\\n\\n');
+    res.end();
 };
 
 /**
@@ -49,29 +42,25 @@ export const chat = async (
 export const query = async (
     req: AuthRequest,
     res: Response,
-    next: NextFunction
 ): Promise<void> => {
-    try {
-        const body = req.body as ChatInput;
-        const userId = req.user!.id;
+    const { user, accessToken } = req;
+    const body = req.body as ChatInput;
 
-        const stream = ragService.generateChatCompletion(
-            body.question,
-            userId,
-            undefined,
-            body.file_id,
-            body.mindmap_id
-        );
+    const stream = ragService.generateChatCompletion({
+        userId: user.id,
+        accessToken,
+        question: body.question,
+        conversationId: undefined,
+        file_id: body.file_id,
+        mindmap_id: body.mindmap_id,
+    });
 
-        let fullResponse = '';
-        for await (const chunk of stream) {
-            fullResponse += chunk;
-        }
-
-        success(res, { answer: fullResponse });
-    } catch (error) {
-        next(error);
+    let fullResponse = '';
+    for await (const chunk of stream) {
+        fullResponse += chunk;
     }
+
+    success(res, { answer: fullResponse });
 };
 
 /**
@@ -81,23 +70,20 @@ export const query = async (
 export const getStatus = async (
     req: AuthRequest,
     res: Response,
-    next: NextFunction
 ): Promise<void> => {
-    try {
-        const { data: chunksCount, error } = await supabaseAdmin
-            .from('document_chunks')
-            .select('*', { count: 'exact', head: true });
+    const { user, accessToken } = req;
 
-        const status = {
-            status: 'ready',
-            vectorStore: 'Supabase pgvector',
-            totalChunks: chunksCount || 0,
-            embeddingModel: 'Xenova/all-MiniLM-L6-v2',
-            chunkingMethod: 'sentence-based'
-        };
+    const { data: chunksCount, error } = await req.supabase!
+        .from('document_chunks')
+        .select('*', { count: 'exact', head: true });
 
-        success(res, status);
-    } catch (error) {
-        next(error);
-    }
+    const status = {
+        status: 'ready',
+        vectorStore: 'Supabase pgvector',
+        totalChunks: chunksCount || 0,
+        embeddingModel: 'Xenova/all-MiniLM-L6-v2',
+        chunkingMethod: 'sentence-based'
+    };
+
+    success(res, status);
 };

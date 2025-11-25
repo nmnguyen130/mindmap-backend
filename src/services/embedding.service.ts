@@ -4,9 +4,6 @@ import { logger } from '@/utils/logger';
 // Configure Transformers.js to use local cache
 transformersEnv.cacheDir = './.cache/transformers';
 
-// Type for model keys
-type ModelKey = 'all-MiniLM';
-
 /**
  * Local embedding service using Transformers.js
  * Model: Xenova/all-MiniLM-L6-v2 (384 dimensions)
@@ -14,44 +11,37 @@ type ModelKey = 'all-MiniLM';
 class EmbeddingService {
     private static pipeline: any = null;
     private static initPromise: Promise<void> | null = null;
-    private static _currentModel: string = '';
 
     // Model configuration
     private static readonly MODEL = {
         name: 'Xenova/all-MiniLM-L6-v2',
         dimensions: 384,
-        batchSize: 16, // Optimized for CPU
+        batchSize: 8,
     } as const;
-
-    private static readonly DEFAULT_MODEL: ModelKey = 'all-MiniLM';
 
     /**
      * Initialize the embedding pipeline (downloads model on first run)
      */
-    private static async initialize(modelKey: ModelKey = this.DEFAULT_MODEL): Promise<void> {
-        const model = this.MODEL;
-
-        // Only re-initialize if model changed
-        if (this.pipeline && this._currentModel === modelKey) {
+    private static async initialize(): Promise<void> {
+        if (this.pipeline) {
             return;
         }
 
-        if (this.initPromise && this._currentModel === modelKey) {
+        if (this.initPromise) {
             return this.initPromise;
         }
 
         this.initPromise = (async () => {
             try {
-                logger.info(`Initializing embedding model: ${model.name} (${model.dimensions} dims)`);
+                logger.info(`Initializing embedding model: ${this.MODEL.name} (${this.MODEL.dimensions} dims)`);
                 const startTime = Date.now();
 
-                this.pipeline = await pipeline('feature-extraction', model.name);
-                this._currentModel = modelKey;
+                this.pipeline = await pipeline('feature-extraction', this.MODEL.name);
 
                 const duration = Date.now() - startTime;
-                logger.info(`Embedding model ${modelKey} initialized in ${duration}ms`);
+                logger.info(`Embedding model initialized in ${duration}ms`);
             } catch (error) {
-                logger.error({ error, model: modelKey }, 'Failed to initialize embedding model');
+                logger.error({ error }, 'Failed to initialize embedding model');
                 throw error;
             }
         })();
@@ -62,16 +52,14 @@ class EmbeddingService {
     /**
      * Generate embedding vector for input text
      * @param text Input text to embed
-     * @param modelKey Model to use (default: all-MiniLM)
      * @returns 384-dimensional embedding vector
      */
-    static async generateEmbedding(text: string, modelKey: ModelKey = this.DEFAULT_MODEL): Promise<number[]> {
+    static async generateEmbedding(text: string): Promise<number[]> {
         if (!text || text.trim().length === 0) {
             throw new Error('Input text cannot be empty');
         }
 
-        await this.initialize(modelKey);
-        const model = this.MODEL;
+        await this.initialize();
 
         try {
             const startTime = Date.now();
@@ -86,108 +74,93 @@ class EmbeddingService {
             const embedding = Array.from(output.data) as number[];
 
             const duration = Date.now() - startTime;
-            logger.debug(`Generated embedding in ${duration}ms (${embedding.length} dimensions, model: ${modelKey})`);
+            logger.debug(`Generated embedding in ${duration}ms (${embedding.length} dimensions)`);
 
-            if (embedding.length !== model.dimensions) {
+            if (embedding.length !== this.MODEL.dimensions) {
                 throw new Error(
-                    `Expected ${model.dimensions} dimensions for ${modelKey}, got ${embedding.length}`
+                    `Expected ${this.MODEL.dimensions} dimensions, got ${embedding.length}`
                 );
             }
 
             return embedding;
         } catch (error) {
-            logger.error({ error, text: text.substring(0, 100), model: modelKey }, 'Failed to generate embedding');
+            logger.error({ error, text: text.substring(0, 100) }, 'Failed to generate embedding');
             throw new Error('Failed to generate embedding');
         }
     }
 
     /**
-     * Generate embeddings for multiple texts in batch
+     * Generate embeddings for multiple texts in batch (parallel processing)
      * @param texts Array of texts to embed
-     * @param modelKey Model to use (default: all-MiniLM)
      * @returns Array of 384-dimensional embedding vectors
      */
-    static async generateEmbeddings(
-        texts: string[],
-        modelKey: ModelKey = this.DEFAULT_MODEL
-    ): Promise<number[][]> {
+    static async generateEmbeddings(texts: string[]): Promise<number[][]> {
         if (!texts || texts.length === 0) {
             throw new Error('Input texts cannot be empty');
         }
 
-        await this.initialize(modelKey);
-        const model = this.MODEL;
+        await this.initialize();
 
-        const embeddings: number[][] = [];
+        const batchSize = this.MODEL.batchSize;
 
-        // Use model-specific batch size to balance speed and memory
-        const batchSize = model.batchSize;
-
-        // Process in batches
+        // Split into batches
+        const batches: string[][] = [];
         for (let i = 0; i < texts.length; i += batchSize) {
-            const batch = texts.slice(i, i + batchSize);
+            batches.push(texts.slice(i, i + batchSize));
+        }
+
+        // Process all batches in parallel
+        const batchPromises = batches.map(async (batch, batchIndex) => {
             const startTime = Date.now();
 
             try {
-                // Use batch processing
                 const outputs = await this.pipeline(batch, {
                     pooling: 'mean',
                     normalize: true,
                 });
 
-                // Extract embeddings from batch
+                const batchEmbeddings: number[][] = [];
                 for (let j = 0; j < batch.length; j++) {
                     const embedding = Array.from(outputs[j].data) as number[];
-                    embeddings.push(embedding);
+                    batchEmbeddings.push(embedding);
                 }
 
                 const duration = Date.now() - startTime;
                 logger.debug(
-                    `Batch ${Math.floor(i / batchSize) + 1}: Generated ${batch.length} embeddings in ${duration}ms (avg: ${(duration / batch.length).toFixed(0)}ms/item, model: ${modelKey})`
+                    `Batch ${batchIndex + 1}/${batches.length}: Generated ${batch.length} embeddings in ${duration}ms (avg: ${(duration / batch.length).toFixed(0)}ms/item)`
                 );
-            } catch (error) {
-                logger.error({ error, batchIndex: i, model: modelKey }, 'Failed to generate batch embeddings');
-                // Fallback to sequential for this batch
-                for (const text of batch) {
-                    const embedding = await this.generateEmbedding(text, modelKey);
-                    embeddings.push(embedding);
-                }
-            }
-        }
 
-        return embeddings;
+                return batchEmbeddings;
+            } catch (error) {
+                logger.error({ error, batchIndex }, 'Batch embedding failed');
+                // Fallback to sequential for this batch
+                const fallbackEmbeddings: number[][] = [];
+                for (const text of batch) {
+                    const embedding = await this.generateEmbedding(text);
+                    fallbackEmbeddings.push(embedding);
+                }
+                return fallbackEmbeddings;
+            }
+        });
+
+        // Wait for all batches and flatten results
+        const batchResults = await Promise.all(batchPromises);
+        return batchResults.flat();
     }
 
     /**
      * Get embedding dimensions
      */
-    static getDimensions(modelKey: ModelKey = this.DEFAULT_MODEL): number {
+    static get dimensions(): number {
         return this.MODEL.dimensions;
     }
 
     /**
      * Get model name
      */
-    static getModelName(modelKey: ModelKey = this.DEFAULT_MODEL): string {
-        return this.MODEL.name;
-    }
-
-    /**
-     * Get current active model
-     */
-    static get currentModel(): string {
-        return this._currentModel || this.DEFAULT_MODEL;
-    }
-
-    // Legacy getters for backward compatibility
-    static get dimensions(): number {
-        return this.getDimensions();
-    }
-
     static get modelName(): string {
-        return this.getModelName();
+        return this.MODEL.name;
     }
 }
 
 export { EmbeddingService };
-export type { ModelKey };
