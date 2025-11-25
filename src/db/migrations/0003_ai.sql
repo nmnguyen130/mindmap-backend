@@ -8,7 +8,7 @@ create table if not exists public.document_chunks (
   mindmap_id uuid references public.mindmaps(id) on delete cascade,
   node_id text,  -- Links chunk to mindmap node for scoped queries
   content text not null,
-  embedding vector(384),  -- all-MiniLM-L6-v2 dimension (local model)
+  embedding vector(384),  -- all-MiniLM-L6-v2 dimension
   start_page integer,
   end_page integer,
   chunk_index integer not null,
@@ -51,8 +51,21 @@ create index if not exists idx_document_chunks_file on public.document_chunks(fi
 create index if not exists idx_document_chunks_mindmap_node on public.document_chunks(mindmap_id, node_id);
 create index if not exists idx_document_chunks_node on public.document_chunks(node_id);
 create index if not exists idx_document_chunks_content on public.document_chunks using gin(to_tsvector('english', content));
+
+-- Optimized HNSW index for vector similarity search
+-- m=16: number of connections per layer (balance between quality and speed)
+-- ef_construction=256: higher value = better index quality (slower build, better search)
 create index if not exists idx_document_chunks_embedding on public.document_chunks 
-  using hnsw (embedding vector_cosine_ops) with (m = 16, ef_construction = 64);
+  using hnsw (embedding vector_cosine_ops) 
+  with (m = 16, ef_construction = 256);
+
+-- Composite index for scoped node queries with embedding included
+-- This optimizes find_similar_chunks_for_node by covering mindmap_id + node_id filter
+create index if not exists idx_document_chunks_mindmap_node_embedding 
+  on public.document_chunks (mindmap_id, node_id) 
+  include (embedding) 
+  where embedding is not null;
+
 -- Structured chunking indexes
 create index if not exists idx_document_chunks_hierarchy on public.document_chunks(mindmap_id, hierarchy_level, chunk_index);
 create index if not exists idx_document_chunks_section on public.document_chunks(mindmap_id, section_heading);
@@ -114,8 +127,13 @@ create policy "messages delete" on public.messages for delete
   using (exists (select 1 from public.conversations c where c.id = conversation_id and c.user_id = auth.uid()));
 
 -- Function to find similar chunks
-create or replace function find_similar_chunks(query_embedding vector(384), file_id uuid default null, mindmap_id uuid default null, top_k int default 5)
-returns table(id uuid, content text, similarity float, chunk_index int)
+create or replace function find_similar_chunks(
+  query_embedding vector(384), 
+  file_id uuid default null, 
+  mindmap_id uuid default null, 
+  top_k int default 8
+)
+returns table(id uuid, content text, similarity double precision, chunk_index int)
 language plpgsql
 security definer
 as $$
@@ -141,11 +159,54 @@ begin
   select
     dc.id,
     dc.content,
-    (dc.embedding <=> query_embedding)::float as similarity,
+    (1 - (dc.embedding <=> query_embedding))::double precision as similarity,
     dc.chunk_index
   from public.document_chunks dc
   where (file_id is null or dc.file_id = file_id)
     and (mindmap_id is null or dc.mindmap_id = mindmap_id)
+    and dc.embedding is not null
+  order by dc.embedding <=> query_embedding
+  limit top_k;
+end;
+$$;
+
+-- Function to find similar chunks for specific node (scoped RAG)
+create or replace function find_similar_chunks_for_node(
+  query_embedding vector(384),
+  p_mindmap_id uuid,
+  p_node_id text,
+  top_k int default 8
+)
+returns table(
+  id uuid,
+  content text,
+  similarity double precision,
+  chunk_index int,
+  node_id text
+)
+language plpgsql
+security definer
+as $$
+begin
+  -- Verify permissions
+  if not exists (
+    select 1 from public.mindmaps m 
+    where m.id = p_mindmap_id and m.owner_id = auth.uid()
+  ) then
+    raise exception 'Access denied to mindmap';
+  end if;
+
+  return query
+  select
+    dc.id,
+    dc.content,
+    (1 - (dc.embedding <=> query_embedding))::double precision as similarity,
+    dc.chunk_index,
+    dc.node_id
+  from public.document_chunks dc
+  where dc.mindmap_id = p_mindmap_id
+    and dc.node_id = p_node_id
+    and dc.embedding is not null
   order by dc.embedding <=> query_embedding
   limit top_k;
 end;
@@ -153,3 +214,4 @@ $$;
 
 -- Grant execute to authenticated users
 grant execute on function find_similar_chunks(vector(384), uuid, uuid, int) to authenticated;
+grant execute on function find_similar_chunks_for_node(vector(384), uuid, text, int) to authenticated;

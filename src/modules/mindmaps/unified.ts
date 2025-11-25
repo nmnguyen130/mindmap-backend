@@ -6,7 +6,6 @@ import { chunkText } from '@/utils/chunking';
 import { ValidationError } from '@/utils/errors';
 import { logger } from '@/utils/logger';
 import { env } from '@/config/env';
-import { cosineSimilarity } from '@/utils/similarity';
 import pdfParse from 'pdf-parse-new';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -51,41 +50,72 @@ const exportChunksDebug = async (
 };
 
 /**
- * Map chunks to mindmap nodes based on semantic similarity
+ * Assign chunks to mindmap nodes using LLM (replaces semantic similarity approach)
+ * LLM decides which node(s) best fit each chunk based on content and mindmap structure
+ * This eliminates the O(chunks × nodes) embedding comparisons
  */
-const mapChunksToNodes = async (
-    chunkEmbeddings: number[][],
+const assignChunksToNodesWithLLM = async (
+    chunks: string[],
     mindmapNodes: MindmapAnalysis['nodes']
 ): Promise<Map<number, string[]>> => {
     const chunkToNodes = new Map<number, string[]>();
 
-    // Generate embeddings for nodes
-    const nodeTexts = mindmapNodes.map(node => `${node.label} ${node.keywords.join(' ')}`);
-    const nodeEmbeddings = await EmbeddingService.generateEmbeddings(nodeTexts);
+    // Process chunks in batches to reduce LLM calls
+    const BATCH_SIZE = 10; // Process 10 chunks per LLM call
 
-    const threshold = 0.55;
+    for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+        const batchChunks = chunks.slice(i, i + BATCH_SIZE);
 
-    chunkEmbeddings.forEach((chunkEmbed, chunkIndex) => {
-        const matches: Array<{ nodeId: string; similarity: number }> = [];
+        // Create compact mindmap representation for LLM
+        const nodesDescription = mindmapNodes.map(node =>
+            `ID: ${node.id} | Label: ${node.label} | Keywords: ${node.keywords.join(', ')}`
+        ).join('\n');
 
-        nodeEmbeddings.forEach((nodeEmbed, nodeIndex) => {
-            const similarity = cosineSimilarity(chunkEmbed, nodeEmbed);
-            if (similarity >= threshold) {
-                matches.push({
-                    nodeId: mindmapNodes[nodeIndex]!.id,
-                    similarity,
-                });
+        const prompt = `Given these mindmap nodes:
+            ${nodesDescription}
+
+            And these text chunks (numbered ${i} to ${i + batchChunks.length - 1}):
+            ${batchChunks.map((chunk, idx) => `[${i + idx}] ${chunk.substring(0, 300)}...`).join('\n\n')}
+
+            For each chunk, determine which node(s) it belongs to. Return ONLY a JSON array like:
+            [
+            {"chunk": 0, "nodes": ["node-1", "node-2"]},
+            {"chunk": 1, "nodes": ["node-0"]}
+            ]
+
+            Rules:
+            - Assign 1-2 most relevant nodes per chunk
+            - Use "node-0" (root) only if no specific node fits
+            - Base decision on semantic relevance between chunk content and node topics`;
+
+        try {
+            const response = await llmService.generateCompletion(prompt, {
+                temperature: 0.1, // Low temp for consistent assignments
+                maxTokens: 1000,
+            });
+
+            // Extract JSON from response
+            const jsonMatch = response.match(/\[[\s\S]*\]/);
+            if (!jsonMatch) {
+                throw new Error('No valid JSON array in response');
             }
-        });
 
-        // Assign to top 2 matching nodes or fallback to root
-        const assignedNodes = matches
-            .sort((a, b) => b.similarity - a.similarity)
-            .slice(0, 2)
-            .map(m => m.nodeId);
+            const assignments = JSON.parse(jsonMatch[0]) as Array<{ chunk: number; nodes: string[] }>;
+            assignments.forEach((item) => {
+                const chunkIndex = item.chunk;
+                const nodeIds = item.nodes && item.nodes.length > 0 ? item.nodes : ['node-0'];
+                chunkToNodes.set(chunkIndex, nodeIds);
+            });
 
-        chunkToNodes.set(chunkIndex, assignedNodes.length > 0 ? assignedNodes : ['node-0']);
-    });
+            logger.debug(`Assigned batch ${Math.floor(i / BATCH_SIZE) + 1}: ${batchChunks.length} chunks`);
+        } catch (error) {
+            logger.warn({ error, batch: i }, 'LLM chunk assignment failed, using fallback');
+            // Fallback: assign all chunks in this batch to root
+            for (let j = i; j < i + batchChunks.length && j < chunks.length; j++) {
+                chunkToNodes.set(j, ['node-0']);
+            }
+        }
+    }
 
     return chunkToNodes;
 };
@@ -151,7 +181,7 @@ export const createMindmapFromPdf = async (
         // Step 4: Generate embeddings for chunks
         const chunkEmbeddings = await EmbeddingService.generateEmbeddings(chunks);
 
-        // Step 5: Create mindmap record and map chunks to nodes in parallel
+        // Step 5: Create mindmap record and assign chunks using LLM in parallel
         const [mindmapRecordResult, chunkToNodesMap] = await Promise.all([
             supabaseAdmin
                 .from('mindmaps')
@@ -163,7 +193,7 @@ export const createMindmapFromPdf = async (
                 })
                 .select()
                 .single(),
-            mapChunksToNodes(chunkEmbeddings, mindmapData.nodes),
+            assignChunksToNodesWithLLM(chunks, mindmapData.nodes),
         ]);
 
         const { data: mindmapRecord, error: mindmapError } = mindmapRecordResult;
@@ -171,10 +201,10 @@ export const createMindmapFromPdf = async (
             throw new Error('Failed to create mindmap');
         }
 
-        // Step 6: Store chunks in database
+        // Step 6: Store chunks in database with 512-dim embeddings
         const chunksToInsert = chunks.flatMap((chunk, index) => {
             const nodeIds = chunkToNodesMap.get(index) || ['node-0'];
-            return nodeIds.map(nodeId => ({
+            return nodeIds.map((nodeId: string) => ({
                 file_id: fileData.id,
                 mindmap_id: mindmapRecord.id,
                 node_id: nodeId,
@@ -249,32 +279,29 @@ export const chatWithNode = async function* (
         throw new Error('Mindmap not found');
     }
 
-    // Get chunks for node
-    const { data: chunks, error: chunksError } = await supabaseAdmin
-        .from('document_chunks')
-        .select('id, content, embedding')
-        .eq('mindmap_id', mindmapId)
-        .eq('node_id', nodeId)
-        .limit(env.TOP_K_CHUNKS * 2);
+    // Get chunks for node and perform similarity search using pgvector
+    const questionEmbedding = await EmbeddingService.generateEmbedding(question);
+    const embeddingArray = `[${questionEmbedding.join(',')}]`;
 
-    if (chunksError || !chunks?.length) {
+    const { data: topChunks, error: searchError } = await supabaseAdmin
+        .rpc('find_similar_chunks_for_node', {
+            query_embedding: embeddingArray,
+            p_mindmap_id: mindmapId,
+            p_node_id: nodeId,
+            top_k: env.TOP_K_CHUNKS,
+        });
+
+    if (searchError) {
+        logger.error({ searchError, mindmapId, nodeId }, 'Vector search failed');
+        throw new Error('Failed to find relevant content');
+    }
+
+    if (!topChunks?.length) {
         throw new Error('No content found for this node');
     }
 
-    // Rank chunks by similarity
-    const questionEmbedding = await EmbeddingService.generateEmbedding(question);
-
-    const topChunks = chunks
-        .map((chunk: any) => ({
-            id: chunk.id,
-            content: chunk.content,
-            similarity: cosineSimilarity(questionEmbedding, JSON.parse(chunk.embedding)),
-        }))
-        .sort((a, b) => b.similarity - a.similarity)
-        .slice(0, env.TOP_K_CHUNKS);
-
-    // Build context
-    const context = topChunks.map(c => c.content).join('\n\n');
+    // Build context from pgvector results
+    const context = topChunks.map((c: any) => c.content).join('\n\n');
     const mindmapData = mindmap.mindmap_data as MindmapAnalysis;
     const nodeInfo = mindmapData.nodes.find(n => n.id === nodeId);
     const nodeTopic = nodeInfo?.label || 'this topic';
@@ -284,7 +311,7 @@ export const chatWithNode = async function* (
     await ragService.saveMessage(conversationId, 'user', question, {
         mindmap_id: mindmapId,
         node_id: nodeId,
-        relevant_chunks: topChunks.map(c => ({ id: c.id, similarity: c.similarity })),
+        relevant_chunks: topChunks.map((c: any) => ({ id: c.id, similarity: c.similarity, chunk_index: c.chunk_index })),
     });
 
     // Stream response

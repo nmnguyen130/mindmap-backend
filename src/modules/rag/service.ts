@@ -5,7 +5,6 @@ import { EmbeddingService } from '@/services/embedding.service';
 import { chunkText, chunkDocumentsWithOverlap } from '@/utils/chunking';
 import { NotFoundError, ValidationError } from '@/utils/errors';
 import { logger } from '@/utils/logger';
-import { cosineSimilarity } from '@/utils/similarity';
 import { Document } from '@langchain/core/documents';
 import pdfParse from 'pdf-parse-new';
 
@@ -191,7 +190,7 @@ export const ingestDocument = async (params: {
 };
 
 /**
- * Retrieve relevant chunks using vector similarity search
+ * Retrieve relevant chunks using vector similarity search with pgvector
  */
 export const retrieveRelevantChunks = async (
     question: string,
@@ -200,23 +199,18 @@ export const retrieveRelevantChunks = async (
     mindmapId?: string
 ): Promise<Array<{ id: string; content: string; similarity: number }>> => {
     const questionEmbedding = await EmbeddingService.generateEmbedding(question);
+    const embeddingArray = `[${questionEmbedding.join(',')}]`;
 
-    let query = supabaseAdmin
-        .from('document_chunks')
-        .select('id, content, embedding')
-        .limit(env.TOP_K_CHUNKS);
-
-    if (fileId) {
-        query = query.eq('file_id', fileId);
-    }
-    if (mindmapId) {
-        query = query.eq('mindmap_id', mindmapId);
-    }
-
-    const { data: chunks, error } = await query;
+    const { data: chunks, error } = await supabaseAdmin
+        .rpc('find_similar_chunks', {
+            query_embedding: embeddingArray,
+            file_id: fileId || null,
+            mindmap_id: mindmapId || null,
+            top_k: env.TOP_K_CHUNKS,
+        });
 
     if (error) {
-        logger.error({ error }, 'Failed to retrieve chunks');
+        logger.error({ error }, 'Failed to retrieve chunks with pgvector');
         throw new Error('Failed to retrieve document chunks');
     }
 
@@ -224,21 +218,11 @@ export const retrieveRelevantChunks = async (
         return [];
     }
 
-    // Calculate cosine similarity
-    const chunksWithSimilarity = chunks.map((chunk: any) => {
-        const chunkEmbedding = JSON.parse(chunk.embedding as string);
-        const similarity = cosineSimilarity(questionEmbedding, chunkEmbedding);
-        return {
-            id: chunk.id,
-            content: chunk.content,
-            similarity,
-        };
-    });
-
-    // Sort by similarity and return top K
-    return chunksWithSimilarity
-        .sort((a: any, b: any) => b.similarity - a.similarity)
-        .slice(0, env.TOP_K_CHUNKS);
+    return chunks.map((chunk: any) => ({
+        id: chunk.id,
+        content: chunk.content,
+        similarity: chunk.similarity,
+    }));
 };
 
 /**
