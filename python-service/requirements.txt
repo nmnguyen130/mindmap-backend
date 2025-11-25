@@ -1,6 +1,0 @@
-flask
-flask-cors
-marker-pdf
-Pillow
-python-dotenv
-gunicorn

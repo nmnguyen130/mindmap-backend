@@ -1,49 +1,13 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '@/middlewares/auth';
+import { supabaseAdmin } from '@/config/supabase';
 import * as ragService from './service';
 import { success } from '@/utils/response';
-import { logger } from '@/utils/logger';
-import { IngestInput, ChatInput } from './schemas';
-
-/**
- * POST /api/ingest
- * Ingest document (text or PDF)
- */
-export const ingest = async (
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> => {
-    try {
-        const userId = req.user!.id;
-        const body = req.body as IngestInput;
-
-        let fileBuffer: Buffer | undefined;
-        let fileName: string | undefined;
-
-        // Check if file was uploaded
-        if (req.file) {
-            fileBuffer = req.file.buffer;
-            fileName = req.file.originalname;
-        }
-
-        const result = await ragService.ingestDocument({
-            userId,
-            text: body.text,
-            fileBuffer,
-            fileName,
-            mindmapId: body.mindmap_id,
-        });
-
-        success(res, result, 201);
-    } catch (error) {
-        next(error);
-    }
-};
+import { ChatInput } from './schemas';
 
 /**
  * POST /api/chat
- * Chat with RAG context (streaming or non-streaming)
+ * Chat with RAG context (streaming)
  */
 export const chat = async (
     req: AuthRequest,
@@ -51,49 +15,36 @@ export const chat = async (
     next: NextFunction
 ): Promise<void> => {
     try {
-        const userId = req.user!.id;
         const body = req.body as ChatInput;
+        const userId = req.user!.id;
 
-        if (body.stream) {
-            // Set headers for SSE
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
+        // Set headers for SSE
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
 
-            const stream = ragService.generateChatCompletion(
-                body.question,
-                userId,
-                body.conversation_id
-            );
+        const stream = ragService.generateChatCompletion(
+            body.question,
+            userId,
+            undefined,
+            body.file_id,
+            body.mindmap_id
+        );
 
-            for await (const chunk of stream) {
-                res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
-            }
-
-            res.write('data: [DONE]\n\n');
-            res.end();
-        } else {
-            // Non-streaming response
-            const stream = ragService.generateChatCompletion(
-                body.question,
-                userId,
-                body.conversation_id
-            );
-
-            let fullResponse = '';
-            for await (const chunk of stream) {
-                fullResponse += chunk;
-            }
-
-            success(res, { answer: fullResponse });
+        for await (const chunk of stream) {
+            res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
         }
+
+        res.write('data: [DONE]\n\n');
+        res.end();
     } catch (error) {
         next(error);
     }
 };
 
 /**
- * POST /api/query (alias for chat with non-streaming default)
+ * POST /api/query
+ * Query RAG system without streaming
  */
 export const query = async (
     req: AuthRequest,
@@ -101,13 +52,15 @@ export const query = async (
     next: NextFunction
 ): Promise<void> => {
     try {
-        const userId = req.user!.id;
         const body = req.body as ChatInput;
+        const userId = req.user!.id;
 
         const stream = ragService.generateChatCompletion(
             body.question,
             userId,
-            body.conversation_id
+            undefined,
+            body.file_id,
+            body.mindmap_id
         );
 
         let fullResponse = '';
@@ -116,6 +69,34 @@ export const query = async (
         }
 
         success(res, { answer: fullResponse });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * GET /api/rag/status
+ * Get RAG service status
+ */
+export const getStatus = async (
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    try {
+        const { data: chunksCount, error } = await supabaseAdmin
+            .from('document_chunks')
+            .select('*', { count: 'exact', head: true });
+
+        const status = {
+            status: 'ready',
+            vectorStore: 'Supabase pgvector',
+            totalChunks: chunksCount || 0,
+            embeddingModel: 'Xenova/all-MiniLM-L6-v2',
+            chunkingMethod: 'sentence-based'
+        };
+
+        success(res, status);
     } catch (error) {
         next(error);
     }

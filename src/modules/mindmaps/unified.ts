@@ -2,16 +2,16 @@ import { supabaseAdmin } from '@/config/supabase';
 import { EmbeddingService } from '@/services/embedding.service';
 import * as storageService from '@/services/storage.service';
 import { llmService, MindmapAnalysis } from '@/services/llm.service';
-import { structuredChunkPipeline } from '@/utils/chunking';
-import * as pythonClient from '@/services/python-client.service';
+import { chunkText } from '@/utils/chunking';
 import { ValidationError } from '@/utils/errors';
 import { logger } from '@/utils/logger';
 import { env } from '@/config/env';
 import { cosineSimilarity } from '@/utils/similarity';
-
+import pdfParse from 'pdf-parse-new';
 
 /**
  * Map chunks to mindmap nodes based on semantic similarity
+ * @[src/modules/mindmaps/unified.ts]
  */
 const mapChunksToNodes = async (
     chunks: string[],
@@ -26,8 +26,7 @@ const mapChunksToNodes = async (
     );
     const nodeEmbeddings = await EmbeddingService.generateEmbeddings(nodeTexts);
 
-    // For each chunk, find best matching nodes (cosine similarity > threshold)
-    const similarityThreshold = 0.55; // Lowered for better matching
+    const similarityThreshold = 0.55;
 
     chunks.forEach((chunk, chunkIndex) => {
         const chunkEmbed = chunkEmbeddings[chunkIndex]!;
@@ -43,7 +42,7 @@ const mapChunksToNodes = async (
             }
         });
 
-        // Assign to top matching nodes (max 2)
+        // Assign to top 2 matching nodes
         nodeMatches
             .sort((a, b) => b.similarity - a.similarity)
             .slice(0, 2)
@@ -54,7 +53,7 @@ const mapChunksToNodes = async (
                 chunkToNodes.get(chunkIndex)!.push(match.nodeId);
             });
 
-        // If no match, assign to root node (node-0)
+        // Fallback to root node if no match
         if (!chunkToNodes.has(chunkIndex)) {
             chunkToNodes.set(chunkIndex, ['node-0']);
         }
@@ -64,7 +63,7 @@ const mapChunksToNodes = async (
 };
 
 /**
- * Unified workflow: Upload PDF → Store → Generate Mindmap → Chunk → Link
+ * Unified workflow: Upload PDF → Extract Text → Generate Mindmap → Chunk → Link
  */
 export const createMindmapFromPdf = async (
     userId: string,
@@ -78,24 +77,7 @@ export const createMindmapFromPdf = async (
             throw new ValidationError('Only PDF files are supported');
         }
 
-        // 2. Convert PDF to Markdown using Python microservice
-        let markdownContent: string;
-
-        try {
-            markdownContent = await pythonClient.convertPdfToMarkdown(fileBuffer);
-            logger.info(`Converted PDF to markdown: ${markdownContent.length} characters`);
-        } catch (error) {
-            logger.error({ error }, 'Python service PDF conversion failed');
-            throw new ValidationError(
-                'PDF conversion failed. Please ensure Python service is running at ' + env.PYTHON_SERVICE_URL
-            );
-        }
-
-        if (!markdownContent || markdownContent.trim().length < 100) {
-            throw new ValidationError('PDF contains insufficient text content');
-        }
-
-        // 3. Upload file to Supabase Storage
+        // 2. Upload file to Supabase Storage
         const uploadResult = await storageService.uploadFile(
             userId,
             fileBuffer,
@@ -103,7 +85,7 @@ export const createMindmapFromPdf = async (
             'application/pdf'
         );
 
-        // 4. Create file record in database
+        // 3. Create file record in database
         const { data: fileData, error: fileError } = await supabaseAdmin
             .from('files')
             .insert({
@@ -121,29 +103,34 @@ export const createMindmapFromPdf = async (
             throw new Error('Failed to create file record');
         }
 
-        // 5. Generate mindmap structure using LLM (from markdown for better structure)
-        const mindmapData = await llmService.analyzePdfForMindmap(markdownContent, fileName);
+        // 4. Extract text from PDF using pdf-parse-new
+        logger.info(`Extracting text from PDF for mindmap: ${fileName}`);
+        const pdfData = await pdfParse(fileBuffer);
+        const pdfText = pdfData.text;
 
-        // 6. Chunk the document (Production 2025: Structure → Semantic → Window)
-        const structuredChunks = await structuredChunkPipeline(markdownContent, {
-            maxChunkSize: env.CHUNK_SIZE,
-            windowOverlap: env.CHUNK_OVERLAP,
-            minSectionSize: env.MIN_SECTION_SIZE,
+        if (!pdfText || pdfText.trim().length === 0) {
+            throw new ValidationError('PDF contains no extractable text');
+        }
+
+        logger.info(`Extracted ${pdfText.length} characters from ${pdfData.numpages} pages`);
+
+        // 5. Generate mindmap structure using LLM
+        const mindmapData = await llmService.analyzePdfForMindmap(pdfText, fileName);
+
+        // 6. Chunk the text using RecursiveCharacterTextSplitter
+        const chunks = await chunkText(pdfText, {
+            chunkSize: env.CHUNK_SIZE,
+            chunkOverlap: env.CHUNK_OVERLAP,
         });
 
-        logger.info(
-            `Created ${structuredChunks.length} structured chunks ` +
-            `(${structuredChunks.filter(c => c.metadata.chunk_type === 'section').length} sections, ` +
-            `${structuredChunks.filter(c => c.metadata.chunk_type === 'semantic').length} semantic)`
-        );
+        logger.info(`Created ${chunks.length} chunks from PDF text`);
 
         // 7. Generate embeddings for chunks
-        const chunkContents = structuredChunks.map(c => c.content);
-        const chunkEmbeddings = await EmbeddingService.generateEmbeddings(chunkContents);
+        const chunkEmbeddings = await EmbeddingService.generateEmbeddings(chunks);
 
         // 8. Map chunks to mindmap nodes using semantic similarity
         const chunkToNodesMap = await mapChunksToNodes(
-            chunkContents,
+            chunks,
             chunkEmbeddings,
             mindmapData.nodes
         );
@@ -165,25 +152,20 @@ export const createMindmapFromPdf = async (
             throw new Error('Failed to create mindmap');
         }
 
-        // 10. Store chunks with node mappings + structured metadata
-        const chunksToInsert = structuredChunks.flatMap((chunk, index) => {
+        // 10. Store chunks with node mappings
+        const chunksToInsert = chunks.flatMap((chunk, index) => {
             const nodeIds = chunkToNodesMap.get(index) || ['node-0'];
-            // Create one chunk entry per node mapping (allows chunks to belong to multiple nodes)
             return nodeIds.map((nodeId) => ({
                 file_id: fileData.id,
                 mindmap_id: mindmapRecord.id,
                 node_id: nodeId,
-                content: chunk.content,
+                content: chunk,
                 embedding: JSON.stringify(chunkEmbeddings[index]),
                 chunk_index: index,
-                // Structured metadata (Production 2025)
-                section_heading: chunk.metadata.section_heading,
-                parent_section: chunk.metadata.parent_section,
-                hierarchy_level: chunk.metadata.hierarchy_level,
-                chunk_type: chunk.metadata.chunk_type,
-                window_before: chunk.window_context?.before,
-                window_after: chunk.window_context?.after,
-                metadata: chunk.metadata,
+                metadata: {
+                    source: fileName,
+                    total_pages: pdfData.numpages,
+                },
             }));
         });
 
@@ -200,8 +182,8 @@ export const createMindmapFromPdf = async (
         const fileUrl = await storageService.getFileUrl(uploadResult.storage_path);
 
         logger.info(
-            `Successfully created mindmap with ${structuredChunks.length} chunks and ` +
-            `${mindmapData.nodes.length} nodes (Structure→Semantic→Window)`
+            `Successfully created mindmap with ${chunks.length} chunks and ` +
+            `${mindmapData.nodes.length} nodes`
         );
 
         return {
@@ -210,7 +192,7 @@ export const createMindmapFromPdf = async (
             file_id: fileData.id,
             storage_url: fileUrl,
             mindmap_data: mindmapData,
-            chunks_created: structuredChunks.length,
+            chunks_created: chunks.length,
             nodes_count: mindmapData.nodes.length,
             created_at: mindmapRecord.created_at,
         };
@@ -232,7 +214,6 @@ export const chatWithNode = async function* (
     question: string,
     userId: string
 ): AsyncGenerator<string, void, unknown> {
-    // Import here to avoid circular dependency
     const { openai, OPENAI_CONFIG } = await import('@/config/openai');
     const ragService = await import('@/modules/rag/service');
 
@@ -254,7 +235,7 @@ export const chatWithNode = async function* (
         .select('id, content, embedding')
         .eq('mindmap_id', mindmapId)
         .eq('node_id', nodeId)
-        .limit(env.TOP_K_CHUNKS * 2); // Get more for node context
+        .limit(env.TOP_K_CHUNKS * 2);
 
     if (chunksError || !chunks || chunks.length === 0) {
         throw new Error('No content found for this node');
@@ -286,7 +267,7 @@ export const chatWithNode = async function* (
     const nodeInfo = mindmapData.nodes.find((n) => n.id === nodeId);
     const nodeTopic = nodeInfo ? nodeInfo.label : 'this topic';
 
-    // 7. Create conversation if needed
+    // 7. Create conversation
     const conversationId = await ragService.getOrCreateConversation(userId);
 
     // 8. Build messages

@@ -1,7 +1,7 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "description": "Production-ready RAG (Retrieval-Augmented Generation) backend with Supabase as the sole database and vector store. Complete TypeScript/Node.js API with streaming chat, conversation history, and mindmap management.",
+  "description": "Production RAG Backend with Supabase pgvector - Single TypeScript/Express server for mindmap generation, document chunking, semantic search, and streaming chat",
   "main": "dist/server.js",
   "type": "module",
   "engines": {
@@ -28,9 +28,10 @@
     "langchain": "^1.0.6",
     "multer": "^2.0.2",
     "openai": "^6.9.0",
+    "pdf-parse-new": "^1.4.1",
     "pino": "^10.1.0",
     "pino-pretty": "^13.1.2",
-    "zod": "^4.1.12"
+    "zod": "^4.1.13"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",

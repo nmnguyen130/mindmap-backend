@@ -16,13 +16,20 @@ router.post(
     ragController.chat
 );
 
-// POST /api/query - Query without streaming (alias)
+// POST /api/query - Query without streaming
 router.post(
     '/query',
     authenticate,
     chatLimiter,
     validate(chatSchema, 'body'),
     ragController.query
+);
+
+// GET /api/rag/status - RAG service status
+router.get(
+    '/status',
+    authenticate,
+    ragController.getStatus
 );
 
 export default router;

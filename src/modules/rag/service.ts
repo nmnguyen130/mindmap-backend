@@ -2,10 +2,12 @@ import { supabaseAdmin } from '@/config/supabase';
 import { openai, OPENAI_CONFIG } from '@/config/openai';
 import { env } from '@/config/env';
 import { EmbeddingService } from '@/services/embedding.service';
-import { chunkTextBySentence } from '@/utils/chunking';
+import { chunkText, chunkDocumentsWithOverlap } from '@/utils/chunking';
 import { NotFoundError, ValidationError } from '@/utils/errors';
 import { logger } from '@/utils/logger';
 import { cosineSimilarity } from '@/utils/similarity';
+import { Document } from '@langchain/core/documents';
+import pdfParse from 'pdf-parse-new';
 
 interface IngestResult {
     file_id: string;
@@ -18,7 +20,96 @@ interface ChatMessage {
 }
 
 /**
- * Ingest document: chunk text, generate embeddings, store in DB
+ * Ingest PDF document: extract text, chunk, generate embeddings, store in DB
+ * @[src/modules/rag/service.ts]
+ */
+export const ingestPdfDocument = async (params: {
+    userId: string;
+    fileBuffer: Buffer;
+    fileName: string;
+    mindmapId?: string;
+}): Promise<IngestResult> => {
+    const { userId, fileBuffer, fileName, mindmapId } = params;
+
+    if (!fileName.toLowerCase().endsWith('.pdf')) {
+        throw new ValidationError('Only PDF files are supported');
+    }
+
+    try {
+        // Extract text from PDF using pdf-parse-new
+        logger.info(`Extracting text from PDF: ${fileName}`);
+        const pdfData = await pdfParse(fileBuffer);
+        const fullText = pdfData.text;
+
+        if (!fullText || fullText.trim().length === 0) {
+            throw new ValidationError('PDF contains no extractable text');
+        }
+
+        logger.info(`Extracted ${fullText.length} characters from ${pdfData.numpages} pages`);
+
+        // Create file record
+        const { data: fileData, error: fileError } = await supabaseAdmin
+            .from('files')
+            .insert({
+                user_id: userId,
+                path: fileName,
+            })
+            .select()
+            .single();
+
+        if (fileError || !fileData) {
+            logger.error({ fileError }, 'Failed to create file record');
+            throw new Error('Failed to create file record');
+        }
+
+        // Chunk the text using RecursiveCharacterTextSplitter
+        const chunks = await chunkText(fullText, {
+            chunkSize: env.CHUNK_SIZE,
+            chunkOverlap: env.CHUNK_OVERLAP,
+        });
+
+        logger.info(`Created ${chunks.length} chunks from PDF`);
+
+        // Generate embeddings for all chunks
+        const embeddings = await EmbeddingService.generateEmbeddings(chunks);
+
+        // Prepare chunks with embeddings for storage
+        const chunksWithEmbeddings = chunks.map((chunk, index) => ({
+            file_id: fileData.id,
+            mindmap_id: mindmapId || null,
+            content: chunk,
+            embedding: JSON.stringify(embeddings[index]),
+            chunk_index: index,
+            metadata: {
+                source: fileName,
+                total_pages: pdfData.numpages,
+            },
+        }));
+
+        // Store chunks in database
+        const { error: insertError } = await supabaseAdmin
+            .from('document_chunks')
+            .insert(chunksWithEmbeddings);
+
+        if (insertError) {
+            logger.error({ insertError }, 'Failed to insert chunks');
+            throw new Error('Failed to store document chunks');
+        }
+
+        logger.info(`Successfully ingested PDF with ${chunks.length} chunks`);
+
+        return {
+            file_id: fileData.id,
+            chunks_created: chunks.length,
+        };
+    } catch (error: any) {
+        logger.error({ error, fileName }, 'PDF ingestion failed');
+        throw new Error(`Failed to process PDF: ${error.message}`);
+    }
+};
+
+/**
+ * Ingest plain text document
  */
 export const ingestDocument = async (params: {
     userId: string;
@@ -31,15 +122,16 @@ export const ingestDocument = async (params: {
 
     let content = text || '';
 
-    // Extract text from file if provided
+    // Route to PDF ingestion if PDF file
     if (fileBuffer && fileName) {
-        if (fileName.endsWith('.txt')) {
+        if (fileName.toLowerCase().endsWith('.pdf')) {
+            return ingestPdfDocument({ userId, fileBuffer, fileName, mindmapId });
+        } else if (fileName.endsWith('.txt')) {
             content = fileBuffer.toString('utf-8');
         } else {
-            throw new ValidationError('Only TXT files supported. For PDFs, use POST /api/mindmaps/create-from-pdf');
+            throw new ValidationError('Only TXT and PDF files supported');
         }
     }
-
 
     if (!content || content.trim().length === 0) {
         throw new ValidationError('No content to ingest');
@@ -61,18 +153,18 @@ export const ingestDocument = async (params: {
     }
 
     // Chunk text
-    const chunks = chunkTextBySentence(content, {
+    const chunks = await chunkText(content, {
         chunkSize: env.CHUNK_SIZE,
         chunkOverlap: env.CHUNK_OVERLAP,
     });
 
-    logger.info(`Created ${chunks.length} chunks from document`);
+    logger.info(`Created ${chunks.length} chunks from text`);
 
-    // Generate embeddings for all chunks using batch processing (optimized)
+    // Generate embeddings
     const embeddings = await EmbeddingService.generateEmbeddings(chunks);
 
-    // Combine chunks with their embeddings
-    const chunksWithEmbeddings = chunks.map((chunk: string, index: number) => ({
+    // Prepare chunks with embeddings
+    const chunksWithEmbeddings = chunks.map((chunk, index) => ({
         file_id: fileData.id,
         mindmap_id: mindmapId || null,
         content: chunk,
@@ -80,7 +172,7 @@ export const ingestDocument = async (params: {
         chunk_index: index,
     }));
 
-    // Store chunks in database
+    // Store chunks
     const { error: insertError } = await supabaseAdmin
         .from('document_chunks')
         .insert(chunksWithEmbeddings);
@@ -90,7 +182,7 @@ export const ingestDocument = async (params: {
         throw new Error('Failed to store document chunks');
     }
 
-    logger.info(`Successfully ingested document with ${chunks.length} chunks`);
+    logger.info(`Successfully ingested text with ${chunks.length} chunks`);
 
     return {
         file_id: fileData.id,
@@ -107,16 +199,13 @@ export const retrieveRelevantChunks = async (
     fileId?: string,
     mindmapId?: string
 ): Promise<Array<{ id: string; content: string; similarity: number }>> => {
-    // Generate embedding for question using local model
     const questionEmbedding = await EmbeddingService.generateEmbedding(question);
 
-    // Build query to find similar chunks
     let query = supabaseAdmin
         .from('document_chunks')
         .select('id, content, embedding')
         .limit(env.TOP_K_CHUNKS);
 
-    // Filter by file or mindmap if provided
     if (fileId) {
         query = query.eq('file_id', fileId);
     }
@@ -135,7 +224,7 @@ export const retrieveRelevantChunks = async (
         return [];
     }
 
-    // Calculate cosine similarity manually
+    // Calculate cosine similarity
     const chunksWithSimilarity = chunks.map((chunk: any) => {
         const chunkEmbedding = JSON.parse(chunk.embedding as string);
         const similarity = cosineSimilarity(questionEmbedding, chunkEmbedding);
@@ -203,7 +292,6 @@ export const getOrCreateConversation = async (
     conversationId?: string
 ): Promise<string> => {
     if (conversationId) {
-        // Verify conversation exists and belongs to user
         const { data, error } = await supabaseAdmin
             .from('conversations')
             .select('id')
@@ -246,7 +334,6 @@ export const generateChatCompletion = async function* (
     fileId?: string,
     mindmapId?: string
 ): AsyncGenerator<string, void, unknown> {
-    // Get or create conversation
     const convId = await getOrCreateConversation(userId, conversationId);
 
     // Retrieve relevant chunks

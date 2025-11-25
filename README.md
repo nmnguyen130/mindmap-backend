@@ -8,14 +8,14 @@ Production-ready backend for intelligent document analysis. Upload PDFs to autom
 flowchart TB
     User[Client] -->|1. Upload PDF| API[POST /mindmaps/create-from-pdf]
     
-    API -->|PDF Buffer| Python[Python Microservice]
-    Python -->|PDF to Markdown| Parse[Markdown Content]
+    API -->|PDF Buffer| PDFLoader[LangChain PDFLoader]
+    PDFLoader -->|Extract Text| Parse[PDF Text Content]
     API --> Store[Supabase Storage]
     
     Parse --> LLM[OpenAI GPT-4]
     LLM --> Mindmap[AI Mindmap Generation]
     
-    Parse --> Chunk[Structure→Semantic→Window Pipeline]
+    Parse --> Chunk[RecursiveCharacterTextSplitter<br/>512 tokens, 100 overlap]
     Chunk --> Embed[Local Embeddings<br/>all-MiniLM-L6-v2]
     
     Mindmap --> Map[Semantic Chunk-to-Node Mapping]
@@ -31,7 +31,7 @@ flowchart TB
     Retrieve --> RAG[Scoped RAG Query]
     RAG -->|4. Stream Response| Answer[AI Answer]
     
-    style Python fill:#FFD700
+    style PDFLoader fill:#FFD700
     style API fill:#4CAF50
     style Mindmap fill:#2196F3
     style NodeAPI fill:#FF9800
@@ -66,8 +66,13 @@ flowchart TB
 
 ### Installation
 
+**1. Install Node.js dependencies:**
 ```bash
 npm install
+```
+
+**2. Configure environment:**
+```bash
 cp .env.example .env
 # Edit .env with your credentials
 ```
@@ -90,9 +95,11 @@ OPENAI_MODEL=gpt-4-turbo-preview
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 
 # RAG Configuration
-CHUNK_SIZE=1000
-CHUNK_OVERLAP=200
+# 2025 Best Practices: 512 tokens with 20% overlap (100 tokens)
+CHUNK_SIZE=512
+CHUNK_OVERLAP=100
 TOP_K_CHUNKS=5
+MIN_SECTION_SIZE=200
 ```
 
 ### Database Setup
@@ -118,9 +125,6 @@ npm run dev
 # Production
 npm run build
 npm start
-
-# Docker (see DOCKER_RUN_GUIDE.md)
-docker compose up --build
 ```
 
 ## API Endpoints
@@ -152,6 +156,21 @@ docker compose up --build
 | POST   | `/api/query`             | Query without streaming           |
 | GET    | `/api/conversations`     | List conversations                |
 | GET    | `/api/conversations/:id` | Get conversation with messages    |
+
+## Development Workflow
+
+### Starting the Application
+
+```bash
+# Development
+npm run dev
+```
+
+### PDF Processing
+
+✅ **Direct PDF processing** using LangChain PDFLoader - no external services required
+⚡ **Fast processing** - text extraction happens in Node.js process
+🔧 **Simple architecture** - single Node.js application handles everything
 
 ## Core Workflow
 
@@ -255,7 +274,7 @@ interface MindmapEdge {
 - **Framework**: Express.js 5
 - **Database**: Supabase (PostgreSQL + pgvector)
 - **AI**: OpenAI GPT-4 for chat, all-MiniLM-L6-v2 for embeddings
-- **PDF Processing**: Python microservice (pdf2md)
+- **PDF Processing**: Python microservice (marker-pdf with lazy loading)
 - **Storage**: Supabase Storage
 - **Security**: Helmet, CORS, RLS, Rate Limiting
 
@@ -313,6 +332,36 @@ CORS_ORIGIN=https://your-frontend.com
 - **Logs**: Pino structured JSON logging
 - **Health**: `GET /health` endpoint
 - **Errors**: Centralized error handler
+
+## Troubleshooting
+
+### PDF Processing Issues
+
+**"Failed to load PDF" error:**
+- Ensure PDF file is not corrupted
+- Check file size limits (adjust multer config if needed)
+- Verify sufficient disk space for temp files
+
+**"Out of memory" during PDF processing:**
+- Large PDFs may require more memory
+- Consider increasing Node.js memory limit: `NODE_OPTIONS="--max-old-space-size=4096"`
+- Process PDFs in smaller batches
+
+### Database Issues
+
+**"pgvector extension not found":**
+- Ensure migrations are run in order (0001, 0002, 0003)
+- Check Supabase dashboard → Database → Extensions
+- Enable `vector` extension if not enabled
+
+### General Issues
+
+**Port conflicts:**
+- Main backend: Change `PORT` in `.env` (default 4000)
+- Python service: Change port in `python-service/.env` (default 5000)
+
+**CORS errors:**
+- Update `CORS_ORIGIN` in `.env` to match your frontend URL
 
 ## License
 
