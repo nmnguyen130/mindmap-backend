@@ -8,62 +8,90 @@ import { logger } from '@/utils/logger';
 import { env } from '@/config/env';
 import { cosineSimilarity } from '@/utils/similarity';
 import pdfParse from 'pdf-parse-new';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+
+/**
+ * Export chunks to file for debugging (optional, can be disabled for performance)
+ */
+const exportChunksDebug = async (
+    chunks: string[],
+    mindmapId: string,
+    fileName: string
+): Promise<void> => {
+    try {
+        const output = [
+            '='.repeat(80),
+            `CHUNK DEBUG EXPORT`,
+            `File: ${fileName}`,
+            `Mindmap ID: ${mindmapId}`,
+            `Total Chunks: ${chunks.length}`,
+            `Timestamp: ${new Date().toISOString()}`,
+            '='.repeat(80),
+            '',
+        ];
+
+        chunks.forEach((chunk, index) => {
+            output.push(`\n${'='.repeat(80)}`);
+            output.push(`CHUNK #${index + 1} | Length: ${chunk.length} chars`);
+            output.push(`${'='.repeat(80)}\n`);
+            output.push(chunk);
+        });
+
+        const exportDir = path.join(process.cwd(), 'exports');
+        await fs.mkdir(exportDir, { recursive: true });
+
+        const exportPath = path.join(exportDir, `chunks_${mindmapId}_${Date.now()}.txt`);
+        await fs.writeFile(exportPath, output.join('\n'), 'utf-8');
+
+        logger.debug(`Chunks exported to: ${exportPath}`);
+    } catch (error) {
+        logger.warn({ error }, 'Failed to export debug chunks');
+    }
+};
 
 /**
  * Map chunks to mindmap nodes based on semantic similarity
- * @[src/modules/mindmaps/unified.ts]
  */
 const mapChunksToNodes = async (
-    chunks: string[],
     chunkEmbeddings: number[][],
     mindmapNodes: MindmapAnalysis['nodes']
 ): Promise<Map<number, string[]>> => {
     const chunkToNodes = new Map<number, string[]>();
 
-    // Generate embeddings for each node (label + keywords combined)
-    const nodeTexts = mindmapNodes.map(
-        (node) => `${node.label} ${node.keywords.join(' ')}`
-    );
+    // Generate embeddings for nodes
+    const nodeTexts = mindmapNodes.map(node => `${node.label} ${node.keywords.join(' ')}`);
     const nodeEmbeddings = await EmbeddingService.generateEmbeddings(nodeTexts);
 
-    const similarityThreshold = 0.55;
+    const threshold = 0.55;
 
-    chunks.forEach((chunk, chunkIndex) => {
-        const chunkEmbed = chunkEmbeddings[chunkIndex]!;
-        const nodeMatches: Array<{ nodeId: string; similarity: number }> = [];
+    chunkEmbeddings.forEach((chunkEmbed, chunkIndex) => {
+        const matches: Array<{ nodeId: string; similarity: number }> = [];
 
         nodeEmbeddings.forEach((nodeEmbed, nodeIndex) => {
             const similarity = cosineSimilarity(chunkEmbed, nodeEmbed);
-            if (similarity >= similarityThreshold) {
-                nodeMatches.push({
+            if (similarity >= threshold) {
+                matches.push({
                     nodeId: mindmapNodes[nodeIndex]!.id,
                     similarity,
                 });
             }
         });
 
-        // Assign to top 2 matching nodes
-        nodeMatches
+        // Assign to top 2 matching nodes or fallback to root
+        const assignedNodes = matches
             .sort((a, b) => b.similarity - a.similarity)
             .slice(0, 2)
-            .forEach((match) => {
-                if (!chunkToNodes.has(chunkIndex)) {
-                    chunkToNodes.set(chunkIndex, []);
-                }
-                chunkToNodes.get(chunkIndex)!.push(match.nodeId);
-            });
+            .map(m => m.nodeId);
 
-        // Fallback to root node if no match
-        if (!chunkToNodes.has(chunkIndex)) {
-            chunkToNodes.set(chunkIndex, ['node-0']);
-        }
+        chunkToNodes.set(chunkIndex, assignedNodes.length > 0 ? assignedNodes : ['node-0']);
     });
 
     return chunkToNodes;
 };
 
 /**
- * Unified workflow: Upload PDF → Extract Text → Generate Mindmap → Chunk → Link
+ * Create mindmap from PDF - Optimized workflow
  */
 export const createMindmapFromPdf = async (
     userId: string,
@@ -71,21 +99,27 @@ export const createMindmapFromPdf = async (
     fileName: string,
     customTitle?: string
 ) => {
+    if (!fileName.toLowerCase().endsWith('.pdf')) {
+        throw new ValidationError('Only PDF files are supported');
+    }
+
     try {
-        // 1. Validate file
-        if (!fileName.toLowerCase().endsWith('.pdf')) {
-            throw new ValidationError('Only PDF files are supported');
+        logger.info(`Processing PDF: ${fileName}`);
+
+        // Step 1: Upload file and extract text in parallel
+        const [uploadResult, pdfData] = await Promise.all([
+            storageService.uploadFile(userId, fileBuffer, fileName, 'application/pdf'),
+            pdfParse(fileBuffer),
+        ]);
+
+        const pdfText = pdfData.text;
+        if (!pdfText?.trim()) {
+            throw new ValidationError('PDF contains no extractable text');
         }
 
-        // 2. Upload file to Supabase Storage
-        const uploadResult = await storageService.uploadFile(
-            userId,
-            fileBuffer,
-            fileName,
-            'application/pdf'
-        );
+        logger.info(`Extracted ${pdfText.length.toLocaleString()} chars from ${pdfData.numpages} pages`);
 
-        // 3. Create file record in database
+        // Step 2: Create file record
         const { data: fileData, error: fileError } = await supabaseAdmin
             .from('files')
             .insert({
@@ -99,63 +133,48 @@ export const createMindmapFromPdf = async (
             .single();
 
         if (fileError || !fileData) {
-            logger.error({ fileError }, 'Failed to create file record');
             throw new Error('Failed to create file record');
         }
 
-        // 4. Extract text from PDF using pdf-parse-new
-        logger.info(`Extracting text from PDF for mindmap: ${fileName}`);
-        const pdfData = await pdfParse(fileBuffer);
-        const pdfText = pdfData.text;
+        // Step 3: Generate mindmap and chunk text in parallel
+        logger.info(`Generating mindmap and chunking text...`);
+        const [mindmapData, chunks] = await Promise.all([
+            llmService.analyzePdfForMindmap(pdfText, fileName),
+            chunkText(pdfText, {
+                chunkSize: env.CHUNK_SIZE,
+                chunkOverlap: env.CHUNK_OVERLAP,
+            }),
+        ]);
 
-        if (!pdfText || pdfText.trim().length === 0) {
-            throw new ValidationError('PDF contains no extractable text');
-        }
+        logger.info(`Created ${mindmapData.nodes.length} nodes, ${chunks.length} chunks`);
 
-        logger.info(`Extracted ${pdfText.length} characters from ${pdfData.numpages} pages`);
-
-        // 5. Generate mindmap structure using LLM
-        const mindmapData = await llmService.analyzePdfForMindmap(pdfText, fileName);
-
-        // 6. Chunk the text using RecursiveCharacterTextSplitter
-        const chunks = await chunkText(pdfText, {
-            chunkSize: env.CHUNK_SIZE,
-            chunkOverlap: env.CHUNK_OVERLAP,
-        });
-
-        logger.info(`Created ${chunks.length} chunks from PDF text`);
-
-        // 7. Generate embeddings for chunks
+        // Step 4: Generate embeddings for chunks
         const chunkEmbeddings = await EmbeddingService.generateEmbeddings(chunks);
 
-        // 8. Map chunks to mindmap nodes using semantic similarity
-        const chunkToNodesMap = await mapChunksToNodes(
-            chunks,
-            chunkEmbeddings,
-            mindmapData.nodes
-        );
+        // Step 5: Create mindmap record and map chunks to nodes in parallel
+        const [mindmapRecordResult, chunkToNodesMap] = await Promise.all([
+            supabaseAdmin
+                .from('mindmaps')
+                .insert({
+                    owner_id: userId,
+                    title: customTitle || mindmapData.title,
+                    source_file_id: fileData.id,
+                    mindmap_data: mindmapData,
+                })
+                .select()
+                .single(),
+            mapChunksToNodes(chunkEmbeddings, mindmapData.nodes),
+        ]);
 
-        // 9. Create mindmap record
-        const { data: mindmapRecord, error: mindmapError } = await supabaseAdmin
-            .from('mindmaps')
-            .insert({
-                owner_id: userId,
-                title: customTitle || mindmapData.title,
-                source_file_id: fileData.id,
-                mindmap_data: mindmapData,
-            })
-            .select()
-            .single();
-
+        const { data: mindmapRecord, error: mindmapError } = mindmapRecordResult;
         if (mindmapError || !mindmapRecord) {
-            logger.error({ mindmapError }, 'Failed to create mindmap record');
             throw new Error('Failed to create mindmap');
         }
 
-        // 10. Store chunks with node mappings
+        // Step 6: Store chunks in database
         const chunksToInsert = chunks.flatMap((chunk, index) => {
             const nodeIds = chunkToNodesMap.get(index) || ['node-0'];
-            return nodeIds.map((nodeId) => ({
+            return nodeIds.map(nodeId => ({
                 file_id: fileData.id,
                 mindmap_id: mindmapRecord.id,
                 node_id: nodeId,
@@ -174,17 +193,18 @@ export const createMindmapFromPdf = async (
             .insert(chunksToInsert);
 
         if (insertError) {
-            logger.error({ insertError }, 'Failed to insert chunks');
-            throw new Error('Failed to store document chunks');
+            throw new Error('Failed to store chunks');
         }
 
-        // 11. Get signed URL for file download
+        // Step 7: Get file URL and export debug (non-blocking)
         const fileUrl = await storageService.getFileUrl(uploadResult.storage_path);
 
-        logger.info(
-            `Successfully created mindmap with ${chunks.length} chunks and ` +
-            `${mindmapData.nodes.length} nodes`
-        );
+        // Export chunks debug (async, don't wait)
+        if (env.NODE_ENV === 'development') {
+            exportChunksDebug(chunks, mindmapRecord.id, fileName).catch(() => { });
+        }
+
+        logger.info(`Mindmap created: ${chunks.length} chunks, ${mindmapData.nodes.length} nodes`);
 
         return {
             id: mindmapRecord.id,
@@ -200,13 +220,13 @@ export const createMindmapFromPdf = async (
         if (error instanceof ValidationError) {
             throw error;
         }
-        logger.error({ error, fileName, userId }, 'Failed to create mindmap from PDF');
+        logger.error({ error, fileName }, 'Failed to create mindmap');
         throw new Error('Failed to process PDF and create mindmap');
     }
 };
 
 /**
- * Chat with specific node's context (scoped RAG)
+ * Chat with specific node context (scoped RAG)
  */
 export const chatWithNode = async function* (
     mindmapId: string,
@@ -217,7 +237,7 @@ export const chatWithNode = async function* (
     const { openai, OPENAI_CONFIG } = await import('@/config/openai');
     const ragService = await import('@/modules/rag/service');
 
-    // 1. Verify mindmap belongs to user
+    // Verify mindmap ownership
     const { data: mindmap, error: mindmapError } = await supabaseAdmin
         .from('mindmaps')
         .select('id, title, mindmap_data')
@@ -229,7 +249,7 @@ export const chatWithNode = async function* (
         throw new Error('Mindmap not found');
     }
 
-    // 2. Get chunks for this specific node
+    // Get chunks for node
     const { data: chunks, error: chunksError } = await supabaseAdmin
         .from('document_chunks')
         .select('id, content, embedding')
@@ -237,72 +257,55 @@ export const chatWithNode = async function* (
         .eq('node_id', nodeId)
         .limit(env.TOP_K_CHUNKS * 2);
 
-    if (chunksError || !chunks || chunks.length === 0) {
+    if (chunksError || !chunks?.length) {
         throw new Error('No content found for this node');
     }
 
-    // 3. Generate embedding for question
+    // Rank chunks by similarity
     const questionEmbedding = await EmbeddingService.generateEmbedding(question);
 
-    // 4. Rank chunks by similarity to question
-    const chunksWithSimilarity = chunks.map((chunk: any) => {
-        const chunkEmbedding = JSON.parse(chunk.embedding);
-        const similarity = cosineSimilarity(questionEmbedding, chunkEmbedding);
-        return {
+    const topChunks = chunks
+        .map((chunk: any) => ({
             id: chunk.id,
             content: chunk.content,
-            similarity,
-        };
-    });
-
-    const topChunks = chunksWithSimilarity
+            similarity: cosineSimilarity(questionEmbedding, JSON.parse(chunk.embedding)),
+        }))
         .sort((a, b) => b.similarity - a.similarity)
         .slice(0, env.TOP_K_CHUNKS);
 
-    // 5. Build context from top chunks
-    const context = topChunks.map((c) => c.content).join('\n\n');
-
-    // 6. Find node info from mindmap_data
+    // Build context
+    const context = topChunks.map(c => c.content).join('\n\n');
     const mindmapData = mindmap.mindmap_data as MindmapAnalysis;
-    const nodeInfo = mindmapData.nodes.find((n) => n.id === nodeId);
-    const nodeTopic = nodeInfo ? nodeInfo.label : 'this topic';
+    const nodeInfo = mindmapData.nodes.find(n => n.id === nodeId);
+    const nodeTopic = nodeInfo?.label || 'this topic';
 
-    // 7. Create conversation
+    // Create conversation and save message
     const conversationId = await ragService.getOrCreateConversation(userId);
-
-    // 8. Build messages
-    const messages = [
-        {
-            role: 'system',
-            content: `You are a helpful AI assistant. Answer questions about "${nodeTopic}" based on the following context from the document. If the context doesn't contain the answer, say so.
-
-Context:
-${context}`,
-        },
-        {
-            role: 'user',
-            content: question,
-        },
-    ];
-
-    // 9. Save user message
     await ragService.saveMessage(conversationId, 'user', question, {
         mindmap_id: mindmapId,
         node_id: nodeId,
-        relevant_chunks: topChunks.map((c) => ({ id: c.id, similarity: c.similarity })),
+        relevant_chunks: topChunks.map(c => ({ id: c.id, similarity: c.similarity })),
     });
 
-    // 10. Stream response from OpenAI
+    // Stream response
     const stream = await openai.chat.completions.create({
         model: OPENAI_CONFIG.chatModel,
-        messages: messages as any,
+        messages: [
+            {
+                role: 'system',
+                content: `You are a helpful AI assistant. Answer questions about "${nodeTopic}" based on the following context. If the context doesn't contain the answer, say so.\n\nContext:\n${context}`,
+            },
+            {
+                role: 'user',
+                content: question,
+            },
+        ] as any,
         stream: true,
         max_tokens: OPENAI_CONFIG.maxTokens,
         temperature: OPENAI_CONFIG.temperature,
     });
 
     let fullResponse = '';
-
     for await (const chunk of stream) {
         const content = chunk.choices[0]?.delta?.content || '';
         if (content) {
@@ -311,6 +314,5 @@ ${context}`,
         }
     }
 
-    // 11. Save assistant message
     await ragService.saveMessage(conversationId, 'assistant', fullResponse);
 };

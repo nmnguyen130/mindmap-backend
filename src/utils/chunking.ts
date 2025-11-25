@@ -1,9 +1,9 @@
 /**
- * Chunking Utility - 2025 Best Practices
- * Uses RecursiveCharacterTextSplitter for optimal semantic chunking
+ * Chunking Utility
+ * Uses TokenTextSplitter for optimal token-based chunking
  */
 
-import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
+import { TokenTextSplitter } from '@langchain/textsplitters';
 import { Document } from '@langchain/core/documents';
 import { logger } from './logger';
 import { env } from '@/config/env';
@@ -14,10 +14,7 @@ export interface ChunkingOptions {
 }
 
 /**
- * Chunk documents using RecursiveCharacterTextSplitter (2025 best practices)
- * - Chunk Size: 512 tokens (optimal for most embedding models)
- * - Overlap: 100 tokens (20% overlap to preserve context)
- * - Separators: Prioritizes paragraph → sentence → word boundaries
+ * Chunk documents using TokenTextSplitter
  */
 export const chunkDocumentsWithOverlap = async (
     documents: Document[],
@@ -26,13 +23,12 @@ export const chunkDocumentsWithOverlap = async (
     const chunkSize = options.chunkSize || env.CHUNK_SIZE;
     const chunkOverlap = options.chunkOverlap || env.CHUNK_OVERLAP;
 
-    logger.info(`Chunking documents: size=${chunkSize}, overlap=${chunkOverlap}`);
+    logger.info(`Chunking documents: size=${chunkSize} tokens, overlap=${chunkOverlap} tokens`);
 
-    const textSplitter = new RecursiveCharacterTextSplitter({
+    const textSplitter = new TokenTextSplitter({
         chunkSize,
         chunkOverlap,
-        separators: ['\n\n', '\n', '. ', '! ', '? ', '; ', ', ', ' ', ''],
-        keepSeparator: true,
+        encodingName: 'o200k_base', // OpenAI's o1/GPT-4o tokenizer
     });
 
     try {
@@ -46,7 +42,8 @@ export const chunkDocumentsWithOverlap = async (
 };
 
 /**
- * Chunk plain text using RecursiveCharacterTextSplitter
+ * Chunk plain text using TokenTextSplitter
+ * Token-based splitting ensures chunks respect LLM token limits
  */
 export const chunkText = async (
     text: string,
@@ -55,16 +52,15 @@ export const chunkText = async (
     const chunkSize = options.chunkSize || env.CHUNK_SIZE;
     const chunkOverlap = options.chunkOverlap || env.CHUNK_OVERLAP;
 
-    const textSplitter = new RecursiveCharacterTextSplitter({
+    const textSplitter = new TokenTextSplitter({
         chunkSize,
         chunkOverlap,
-        separators: ['\n\n', '\n', '. ', '! ', '? ', '; ', ', ', ' ', ''],
-        keepSeparator: true,
+        encodingName: 'o200k_base',
     });
 
     try {
         const chunks = await textSplitter.splitText(text);
-        logger.debug(`Split text into ${chunks.length} chunks`);
+        logger.debug(`Split text into ${chunks.length} chunks (token-based)`);
         return chunks.filter((c) => c.trim().length > 0);
     } catch (error) {
         logger.error({ error }, 'Text splitting failed');
