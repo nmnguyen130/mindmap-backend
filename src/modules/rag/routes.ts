@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { authenticate } from '@/middlewares/auth';
 import { validate } from '@/middlewares/validation';
-import { processDocumentSchema, ragChatSchema } from './schemas';
+import { uploadSinglePdf } from '@/middlewares/upload';
+import { ragChatSchema } from './schemas';
 import * as ragController from './controller';
 
 const router = Router();
@@ -9,11 +10,11 @@ const router = Router();
 // All routes require authentication
 router.use(authenticate);
 
-// POST /api/rag/process - Process a document
+// POST /api/rag/create-from-pdf - Upload PDF and create document
 router.post(
-    '/process',
-    validate(processDocumentSchema, 'body'),
-    ragController.process
+    '/create-from-pdf',
+    uploadSinglePdf,
+    ragController.createFromPdf
 );
 
 // POST /api/rag/chat - RAG chat (streaming)

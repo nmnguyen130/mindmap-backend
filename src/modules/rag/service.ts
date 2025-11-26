@@ -1,7 +1,9 @@
+import pdfParse from 'pdf-parse-new';
 import { createSupabaseClient } from '@/config/supabase';
 import { EmbeddingService } from '@/services/embedding.service';
+import * as storageService from '@/services/storage.service';
 import { openai, OPENAI_CONFIG } from '@/config/openai';
-import { NotFoundError } from '@/utils/errors';
+import { NotFoundError, ValidationError } from '@/utils/errors';
 import { logger } from '@/utils/logger';
 
 export interface DocumentSection {
@@ -27,70 +29,152 @@ type ServiceParams<T = {}> = {
 } & T;
 
 /**
- * Process document: download, split into sections, generate embeddings
- * Based on GitHub reference: supabase/functions/process/index.ts
+ * Create document from PDF - Complete workflow
+ * Upload PDF → Create document → Process and generate embeddings → Optionally generate mindmap
+ * Based on GitHub reference: chatgpt-your-files
  */
-export const processDocument = async (params: ServiceParams<{
-    documentId: string;
-}>): Promise<{ sections_created: number }> => {
-    const { userId, accessToken, documentId } = params;
+export const createDocumentFromPdf = async (params: ServiceParams<{
+    fileBuffer: Buffer;
+    fileName: string;
+    title?: string;
+    generateMindmap?: boolean;
+}>): Promise<{
+    id: string;
+    name: string;
+    storage_object_id: string;
+    sections_created: number;
+    created_at: string;
+    mindmap?: {
+        id: string;
+        title: string;
+        mindmap_data: any;
+        nodes_count: number;
+    };
+}> => {
+    const { userId, accessToken, fileBuffer, fileName, title, generateMindmap = false } = params;
     const supabase = createSupabaseClient(accessToken);
 
-    // Get document with storage path
-    const { data: document, error: docError } = await supabase
-        .from('documents_with_storage_path')
-        .select('*')
-        .eq('id', documentId)
-        .single();
-
-    if (docError || !document) {
-        logger.error({ docError, userId, documentId }, 'Document not found');
-        throw new NotFoundError('Document not found');
+    // Validate file type
+    if (!fileName.toLowerCase().endsWith('.pdf')) {
+        throw new ValidationError('Only PDF files are supported');
     }
 
-    // Download file from storage
-    const { data: file, error: downloadError } = await supabase.storage
-        .from('files')
-        .download(document.storage_object_path);
+    try {
+        logger.info({ userId, fileName, generateMindmap }, 'Processing PDF upload');
 
-    if (downloadError || !file) {
-        logger.error({ downloadError, userId, documentId }, 'Failed to download file');
-        throw new Error('Failed to download storage object');
+        // Step 1: Parse PDF to extract text
+        const pdfData = await pdfParse(fileBuffer);
+        const text = pdfData.text.trim();
+
+        if (!text) {
+            throw new ValidationError('PDF contains no extractable text');
+        }
+
+        // Step 2: Upload file to Supabase Storage
+        const { id: storageId, path: storagePath, file_size: fileSize } = await storageService.uploadFile(userId, fileBuffer, fileName, 'application/pdf');
+
+        // Step 3: Create document record
+        const documentName = title || fileName;
+        const { data: document, error: docError } = await supabase
+            .from('documents')
+            .insert({
+                name: documentName,
+                storage_object_id: storageId,
+                created_by: userId,
+            })
+            .select()
+            .single();
+
+        if (docError || !document) {
+            logger.error({ docError, userId }, 'Failed to create document record');
+            throw new Error(`Failed to create document: ${docError?.message}`);
+        }
+
+        // Step 4: Split text into sections
+        const sections = splitIntoSections(text);
+        logger.info({ documentId: document.id, sectionCount: sections.length }, 'Text split into sections');
+
+        // Step 5: Insert document sections
+        const { data: insertedSections, error: sectionsError } = await supabase
+            .from('document_sections')
+            .insert(
+                sections.map((content, index) => ({
+                    document_id: document.id,
+                    content,
+                    metadata: {
+                        source: fileName,
+                        page_count: pdfData.numpages,
+                        section_index: index,
+                    },
+                }))
+            )
+            .select('id');
+
+        if (sectionsError || !insertedSections) {
+            logger.error({ sectionsError, documentId: document.id }, 'Failed to insert sections');
+            throw new Error(`Failed to create document sections: ${sectionsError?.message}`);
+        }
+
+        // Step 6: Generate embeddings asynchronously (background task)
+        generateEmbeddings({
+            userId,
+            accessToken,
+            sectionIds: insertedSections.map(s => s.id),
+        }).catch(err => {
+            logger.error({ err, documentId: document.id }, 'Failed to generate embeddings');
+        });
+
+        const result: any = {
+            id: document.id,
+            name: document.name,
+            storage_object_id: document.storage_object_id,
+            sections_created: insertedSections.length,
+            created_at: document.created_at,
+        };
+
+        // Step 7 (Optional): Generate mindmap structure using LLM
+        if (generateMindmap) {
+            // Import llmService lazily to avoid circular dependencies
+            const { llmService } = await import('@/services/llm.service');
+
+            const mindmapData = await llmService.analyzePdfForMindmap(text, fileName);
+            logger.info({ nodes: mindmapData.nodes.length }, 'Mindmap structure generated');
+
+            // Step 8: Create mindmap record
+            const { data: mindmap, error: mindmapError } = await supabase
+                .from('mindmaps')
+                .insert({
+                    owner_id: userId,
+                    title: title || mindmapData.title,
+                    source_document_id: document.id,
+                    mindmap_data: mindmapData,
+                })
+                .select()
+                .single();
+
+            if (mindmapError || !mindmap) {
+                logger.error({ mindmapError }, 'Failed to create mindmap');
+                throw new Error(`Failed to create mindmap: ${mindmapError?.message}`);
+            }
+
+            logger.info({ mindmapId: mindmap.id, documentId: document.id }, 'Mindmap created successfully');
+
+            result.mindmap = {
+                id: mindmap.id,
+                title: mindmap.title,
+                mindmap_data: mindmapData,
+                nodes_count: mindmapData.nodes.length,
+            };
+        }
+
+        return result;
+    } catch (error) {
+        if (error instanceof ValidationError) {
+            throw error;
+        }
+        logger.error({ error, userId, fileName }, 'PDF upload workflow failed');
+        throw new Error('Failed to process PDF');
     }
-
-    const fileContents = await file.text();
-
-    // Simple markdown-like processing: split by paragraphs
-    const sections = splitIntoSections(fileContents);
-
-    logger.info({ documentId, sections: sections.length }, 'Split document into sections');
-
-    // Insert sections (without embeddings initially)
-    const { data: insertedSections, error: insertError } = await supabase
-        .from('document_sections')
-        .insert(
-            sections.map(content => ({
-                document_id: documentId,
-                content,
-            }))
-        )
-        .select();
-
-    if (insertError || !insertedSections) {
-        logger.error({ insertError, userId, documentId }, 'Failed to save document sections');
-        throw new Error('Failed to save document sections');
-    }
-
-    // Generate embeddings asynchronously (background task)
-    generateEmbeddings({
-        userId,
-        accessToken,
-        sectionIds: insertedSections.map(s => s.id),
-    }).catch(err => {
-        logger.error({ err, documentId }, 'Failed to generate embeddings');
-    });
-
-    return { sections_created: insertedSections.length };
 };
 
 /**
@@ -185,13 +269,15 @@ export async function* ragChat(params: ServiceParams<{
     const { userId, accessToken, question, documentId, matchThreshold, matchCount } = params;
     const supabase = createSupabaseClient(accessToken);
 
+    logger.debug({ matchThreshold, matchCount, documentId }, 'RAG Chat parameters');
+
     // Generate embedding for the question
     const questionEmbedding = await EmbeddingService.generateEmbedding(question);
 
     // Search for similar sections using match_document_sections
     const { data, error: matchError } = await supabase
         .rpc('match_document_sections', {
-            embedding: questionEmbedding,
+            query_embedding: questionEmbedding,
             match_threshold: matchThreshold,
             match_count: matchCount,
             filter_document_id: documentId || null,

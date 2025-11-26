@@ -34,9 +34,9 @@ Authorization: Bearer {{accessToken}}
 
 ###
 
-### 4. Create Mindmap from PDF (Unified Workflow)
-# @name createMindmap
-POST {{baseUrl}}/mindmaps/create-from-pdf
+### 4. Upload PDF - Document Only (No Mindmap)
+# @name uploadDocument
+POST {{baseUrl}}/rag/create-from-pdf
 Authorization: Bearer {{accessToken}}
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
 
@@ -45,65 +45,86 @@ Content-Disposition: form-data; name="file"; filename="Building_Efficient_SLM.pd
 Content-Type: application/pdf
 
 < ./Building_Efficient_SLM.pdf
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="title"
+
+Building Efficient SLM
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="generateMindmap"
+
+false
 ------WebKitFormBoundary7MA4YWxkTrZu0gW--
 
 ###
 
-### Mindmap ID
-@mindmapId = {{createMindmap.response.body.data.id}}
-
-###
-
-### 5. Get Mindmap Details
-GET {{baseUrl}}/mindmaps/{{mindmapId}}
+### 5. Upload PDF with Mindmap Generation
+# @name uploadWithMindmap
+POST {{baseUrl}}/rag/create-from-pdf
 Authorization: Bearer {{accessToken}}
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="file"; filename="Building_Efficient_SLM.pdf"
+Content-Type: application/pdf
+
+< ./Building_Efficient_SLM.pdf
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="title"
+
+SLM Guide with Mindmap
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="generateMindmap"
+
+true
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
 
 ###
 
-### 6. Chat with Specific Node (Scoped RAG)
-# Use node ID from mindmap_data.nodes (e.g., "node-1", "node-2")
-POST {{baseUrl}}/mindmaps/d2711214-67c0-4541-8c06-ef2764b3f7ca/nodes/node-1/chat
-Authorization: Bearer {{accessToken}}
-Content-Type: application/json
-
-{
-  "question": "Explain this topic in detail",
-  "stream": true
-}
+### Document ID
+@documentId = {{uploadWithMindmap.response.body.data.id}}
 
 ###
 
-### 7. Create Conversation
-# @name createConversation
-POST {{baseUrl}}/conversations
-Authorization: Bearer {{accessToken}}
-Content-Type: application/json
-
-{
-  "title": "AI Discussion"
-}
+### Mindmap ID (from upload with mindmap)
+@mindmapId = {{uploadWithMindmap.response.body.data.mindmap.id}}
 
 ###
 
-### Conversation Id
-@conversationId = {{createConversation.response.body.data.id}}
-
-###
-
-### 8. Chat (General - All Context)
-POST {{baseUrl}}/chat
+### 6. Chat with Document (RAG)
+POST {{baseUrl}}/rag/chat
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {
-  "question": "What are neural networks?",
-  "stream": true
+  "question": "What are the key points about efficient SLMs?",
+  "document_id": "{{documentId}}",
+  "match_threshold": 0.5,
+  "match_count": 5
 }
 
 ###
 
-### 9. Get Conversation
-GET {{baseUrl}}/conversations/{{conversationId}}
+### 7. Chat with All Documents (No Filter)
+POST {{baseUrl}}/rag/chat
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "question": "Summarize what you know about machine learning",
+  "match_threshold": 0.7,
+  "match_count": 10
+}
+
+###
+
+### 8. List Documents
+GET {{baseUrl}}/rag/documents
+Authorization: Bearer {{accessToken}}
+
+###
+
+### 9. Get Document Details with Sections
+GET {{baseUrl}}/rag/documents/{{documentId}}
 Authorization: Bearer {{accessToken}}
 
 ###
@@ -114,36 +135,14 @@ Authorization: Bearer {{accessToken}}
 
 ###
 
-### 11. List Conversations
-GET {{baseUrl}}/conversations
+### 11. Get Mindmap Details
+GET {{baseUrl}}/mindmaps/{{mindmapId}}
 Authorization: Bearer {{accessToken}}
 
 ###
 
-### 12. Update Conversation
-PUT {{baseUrl}}/conversations/{{conversationId}}
-Authorization: Bearer {{accessToken}}
-Content-Type: application/json
-
-{
-  "title": "Updated Discussion"
-}
-
-###
-
-### 13. Query (Non-streaming)
-POST {{baseUrl}}/query
-Authorization: Bearer {{accessToken}}
-Content-Type: application/json
-
-{
-  "question": "What is AI?",
-  "stream": false
-}
-
-###
-
-### 14. Create Empty Mindmap
+### 12. Create Empty Mindmap
+# @name createEmptyMindmap
 POST {{baseUrl}}/mindmaps
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
@@ -151,5 +150,40 @@ Content-Type: application/json
 {
   "title": "Manual Mindmap"
 }
+
+###
+
+### Empty Mindmap ID
+@emptyMindmapId = {{createEmptyMindmap.response.body.data.id}}
+
+###
+
+### 13. Update Mindmap
+PUT {{baseUrl}}/mindmaps/{{emptyMindmapId}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "title": "Updated Manual Mindmap",
+  "version": 2
+}
+
+###
+
+### 14. Delete Mindmap
+DELETE {{baseUrl}}/mindmaps/{{emptyMindmapId}}
+Authorization: Bearer {{accessToken}}
+
+###
+
+### 15. Delete Document
+DELETE {{baseUrl}}/rag/documents/{{documentId}}
+Authorization: Bearer {{accessToken}}
+
+###
+
+### 16. List Conversations
+GET {{baseUrl}}/conversations
+Authorization: Bearer {{accessToken}}
 
 ###

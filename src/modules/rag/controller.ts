@@ -2,22 +2,36 @@ import { Response } from 'express';
 import { AuthRequest } from '@/middlewares/auth';
 import * as ragService from './service';
 import { success } from '@/utils/response';
-import { ProcessDocumentInput, RagChatInput } from './schemas';
+import { RagChatInput } from './schemas';
+import { ValidationError } from '@/utils/errors';
 
 /**
- * POST /api/rag/process
+ * POST /api/rag/create-from-pdf
+ * Upload PDF, create document, and generate embeddings
+ * Optionally generate mindmap if generateMindmap=true
  */
-export const process = async (req: AuthRequest, res: Response) => {
+export const createFromPdf = async (req: AuthRequest, res: Response) => {
     const { user, accessToken } = req;
-    const body = req.body as ProcessDocumentInput;
 
-    const result = await ragService.processDocument({
+    // Check if file was uploaded
+    if (!req.file) {
+        throw new ValidationError('PDF file is required');
+    }
+
+    // Get optional parameters from body
+    const title = req.body.title;
+    const generateMindmap = req.body.generateMindmap === 'true' || req.body.generateMindmap === true;
+
+    const result = await ragService.createDocumentFromPdf({
         userId: user.id,
         accessToken,
-        documentId: body.document_id,
+        fileBuffer: req.file.buffer,
+        fileName: req.file.originalname,
+        title,
+        generateMindmap,
     });
 
-    success(res, result);
+    success(res, result, 201);
 };
 
 /**

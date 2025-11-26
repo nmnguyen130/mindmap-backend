@@ -2,8 +2,6 @@
 
 -- Enable pgvector extension for embeddings
 create extension if not exists vector with schema extensions;
-create extension if not exists pg_net with schema extensions;
-
 
 -- TABLES
 
@@ -15,17 +13,6 @@ create table if not exists public.documents (
   created_by uuid not null references auth.users (id) on delete cascade default auth.uid(),
   created_at timestamptz not null default now()
 );
-
--- View to easily access document with storage path
-create view public.documents_with_storage_path
-with (security_invoker=true)
-as
-  select 
-    documents.*, 
-    storage.objects.name as storage_object_path
-  from public.documents
-  join storage.objects
-    on storage.objects.id = documents.storage_object_id;
 
 -- Document sections: stores chunked content with embeddings
 create table if not exists public.document_sections (
@@ -65,7 +52,8 @@ create table if not exists public.messages (
 -- Using inner product because embeddings are normalized (faster than cosine)
 create index if not exists idx_document_sections_embedding 
   on public.document_sections 
-  using hnsw (embedding vector_ip_ops);
+  using hnsw (embedding vector_cosine_ops)
+  with (m=16, ef_construction=256);
 
 -- Standard indexes for lookups
 create index if not exists idx_documents_created_by on public.documents(created_by);
@@ -224,29 +212,34 @@ create trigger conversations_updated_at
 -- Uses inner product (negative for threshold comparison)
 -- Returns setof for PostgREST resource embeddings support
 create or replace function public.match_document_sections(
-  embedding vector(384), 
-  match_threshold float default 0.5,
+  query_embedding vector(384), 
+  match_threshold float default 0.78,
   match_count int default 10,
   filter_document_id uuid default null
 )
-returns setof public.document_sections
+returns table (
+  id uuid,
+  document_id uuid,
+  content text,
+  metadata jsonb,
+  similarity float
+)
 language plpgsql
 security definer
 as $$
-#variable_conflict use_variable
 begin
   return query
-  select *
-  from public.document_sections
-  where 
-    -- Filter by document if provided
-    (filter_document_id is null or document_id = filter_document_id)
-    -- Inner product similarity threshold (negative because inner product is negative)
-    and document_sections.embedding <#> embedding < -match_threshold
-    -- Only return sections with embeddings
-    and document_sections.embedding is not null
-  -- Sort by similarity (inner product, best match first)
-  order by document_sections.embedding <#> embedding
+  select 
+    ds.id,
+    ds.document_id,
+    ds.content,
+    ds.metadata,
+    (1 - (ds.embedding <=> query_embedding))::float as similarity
+  from public.document_sections ds
+  where ds.embedding is not null
+    and (filter_document_id is null or ds.document_id = filter_document_id)
+    and (1 - (ds.embedding <=> query_embedding)) > match_threshold
+  order by ds.embedding <=> query_embedding
   limit match_count;
 end;
 $$;

@@ -16,7 +16,8 @@ import { logger } from '@/utils/logger';
 const STORAGE_BUCKET = 'documents';
 
 export interface UploadResult {
-    storage_path: string;
+    id: string;
+    path: string;
     public_url?: string;
     file_size: number;
 }
@@ -52,7 +53,8 @@ export const uploadFile = async (
         logger.info({ storagePath, userId, fileName }, 'File uploaded successfully');
 
         return {
-            storage_path: data.path,
+            id: data.id,
+            path: data.path,
             file_size: fileBuffer.length,
         };
     } catch (error) {

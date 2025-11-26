@@ -42,7 +42,7 @@ export const createApp = (): Application => {
 
     // API routes
     app.use('/api/auth', authRoutes);
-    app.use('/api', ragRoutes);
+    app.use('/api/rag', ragRoutes);
     app.use('/api/conversations', conversationRoutes);
     app.use('/api/mindmaps', mindmapRoutes);
 
