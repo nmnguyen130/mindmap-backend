@@ -91,7 +91,7 @@ export const create = async (req: AuthRequest, res: Response) => {
         userId: user.id,
         accessToken,
         title: body.title,
-        sourceFileId: body.source_file_id,
+        sourceDocumentId: body.source_document_id,
     });
 
     success(res, mindmap, 201);

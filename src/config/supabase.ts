@@ -27,5 +27,8 @@ export const createSupabaseClient = (accessToken: string): SupabaseClient => {
                 Authorization: `Bearer ${accessToken}`,
             },
         },
+        auth: {
+            persistSession: false,
+        },
     });
 };

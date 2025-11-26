@@ -1,386 +1,342 @@
-import { SupabaseClient } from '@supabase/supabase-js';
-import { openai, OPENAI_CONFIG } from '@/config/openai';
-import { env } from '@/config/env';
+import { createSupabaseClient } from '@/config/supabase';
 import { EmbeddingService } from '@/services/embedding.service';
-import { chunkText, chunkDocumentsWithOverlap } from '@/utils/chunking';
-import { NotFoundError, ValidationError } from '@/utils/errors';
+import { openai, OPENAI_CONFIG } from '@/config/openai';
+import { NotFoundError } from '@/utils/errors';
 import { logger } from '@/utils/logger';
-import { Document } from '@langchain/core/documents';
-import pdfParse from 'pdf-parse-new';
 
-interface IngestResult {
-    file_id: string;
-    chunks_created: number;
-}
-
-interface ChatMessage {
-    role: 'user' | 'assistant' | 'system';
+export interface DocumentSection {
+    id: string;
+    document_id: string;
     content: string;
+    embedding: number[] | null;
+    metadata: Record<string, any>;
+    created_at: string;
+}
+
+export interface Document {
+    id: string;
+    name: string;
+    storage_object_id: string;
+    created_by: string;
+    created_at: string;
+}
+
+type ServiceParams<T = {}> = {
+    userId: string;
+    accessToken: string;
+} & T;
+
+/**
+ * Process document: download, split into sections, generate embeddings
+ * Based on GitHub reference: supabase/functions/process/index.ts
+ */
+export const processDocument = async (params: ServiceParams<{
+    documentId: string;
+}>): Promise<{ sections_created: number }> => {
+    const { userId, accessToken, documentId } = params;
+    const supabase = createSupabaseClient(accessToken);
+
+    // Get document with storage path
+    const { data: document, error: docError } = await supabase
+        .from('documents_with_storage_path')
+        .select('*')
+        .eq('id', documentId)
+        .single();
+
+    if (docError || !document) {
+        logger.error({ docError, userId, documentId }, 'Document not found');
+        throw new NotFoundError('Document not found');
+    }
+
+    // Download file from storage
+    const { data: file, error: downloadError } = await supabase.storage
+        .from('files')
+        .download(document.storage_object_path);
+
+    if (downloadError || !file) {
+        logger.error({ downloadError, userId, documentId }, 'Failed to download file');
+        throw new Error('Failed to download storage object');
+    }
+
+    const fileContents = await file.text();
+
+    // Simple markdown-like processing: split by paragraphs
+    const sections = splitIntoSections(fileContents);
+
+    logger.info({ documentId, sections: sections.length }, 'Split document into sections');
+
+    // Insert sections (without embeddings initially)
+    const { data: insertedSections, error: insertError } = await supabase
+        .from('document_sections')
+        .insert(
+            sections.map(content => ({
+                document_id: documentId,
+                content,
+            }))
+        )
+        .select();
+
+    if (insertError || !insertedSections) {
+        logger.error({ insertError, userId, documentId }, 'Failed to save document sections');
+        throw new Error('Failed to save document sections');
+    }
+
+    // Generate embeddings asynchronously (background task)
+    generateEmbeddings({
+        userId,
+        accessToken,
+        sectionIds: insertedSections.map(s => s.id),
+    }).catch(err => {
+        logger.error({ err, documentId }, 'Failed to generate embeddings');
+    });
+
+    return { sections_created: insertedSections.length };
+};
+
+/**
+ * Split text into sections (simple paragraph-based)
+ */
+function splitIntoSections(text: string): string[] {
+    // Split by double newlines (paragraphs)
+    const paragraphs = text
+        .split(/\n\s*\n/)
+        .map(p => p.trim())
+        .filter(p => p.length > 0);
+
+    const maxChunkSize = 1000;
+    const sections: string[] = [];
+    let currentSection = '';
+
+    for (const paragraph of paragraphs) {
+        if (currentSection.length + paragraph.length > maxChunkSize && currentSection.length > 0) {
+            sections.push(currentSection);
+            currentSection = paragraph;
+        } else {
+            currentSection += (currentSection ? '\n\n' : '') + paragraph;
+        }
+    }
+
+    if (currentSection) {
+        sections.push(currentSection);
+    }
+
+    return sections.length > 0 ? sections : [text];
 }
 
 /**
- * Ingest PDF document: extract text, chunk, generate embeddings, store in DB
+ * Generate embeddings for sections
+ * Based on GitHub reference: supabase/functions/embed/index.ts
  */
-export const ingestPdfDocument = async (params: {
-    userId: string;
-    fileBuffer: Buffer;
-    fileName: string;
-    mindmapId?: string;
-    supabase: SupabaseClient;
-}): Promise<IngestResult> => {
-    const { userId, fileBuffer, fileName, mindmapId, supabase } = params;
+async function generateEmbeddings(params: ServiceParams<{
+    sectionIds: string[];
+}>): Promise<void> {
+    const { userId, accessToken, sectionIds } = params;
+    const supabase = createSupabaseClient(accessToken);
 
-    if (!fileName.toLowerCase().endsWith('.pdf')) {
-        throw new ValidationError('Only PDF files are supported');
+    // Get sections without embeddings
+    const { data: sections, error: selectError } = await supabase
+        .from('document_sections')
+        .select('id, content')
+        .in('id', sectionIds)
+        .is('embedding', null);
+
+    if (selectError || !sections) {
+        logger.error({ selectError, userId }, 'Failed to fetch sections');
+        return;
     }
 
-    try {
-        // Extract text from PDF using pdf-parse-new
-        logger.info(`Extracting text from PDF: ${fileName}`);
-        const pdfData = await pdfParse(fileBuffer);
-        const fullText = pdfData.text;
-
-        if (!fullText || fullText.trim().length === 0) {
-            throw new ValidationError('PDF contains no extractable text');
+    for (const section of sections) {
+        if (!section.content) {
+            logger.error({ sectionId: section.id }, 'No content available');
+            continue;
         }
 
-        logger.info(`Extracted ${fullText.length} characters from ${pdfData.numpages} pages`);
+        try {
+            // Generate embedding
+            const embedding = await EmbeddingService.generateEmbedding(section.content);
 
-        // Create file record
-        const { data: fileData, error: fileError } = await supabase
-            .from('files')
-            .insert({
-                user_id: userId,
-                path: fileName,
-            })
-            .select()
-            .single();
+            // Update section with embedding
+            const { error: updateError } = await supabase
+                .from('document_sections')
+                .update({ embedding })
+                .eq('id', section.id);
 
-        if (fileError || !fileData) {
-            logger.error({ fileError }, 'Failed to create file record');
-            throw new Error('Failed to create file record');
+            if (updateError) {
+                logger.error({ updateError, sectionId: section.id }, 'Failed to save embedding');
+            } else {
+                logger.info({ sectionId: section.id }, 'Generated embedding');
+            }
+        } catch (err) {
+            logger.error({ err, sectionId: section.id }, 'Error generating embedding');
         }
-
-        // Chunk the text using RecursiveCharacterTextSplitter
-        const chunks = await chunkText(fullText, {
-            chunkSize: env.CHUNK_SIZE,
-            chunkOverlap: env.CHUNK_OVERLAP,
-        });
-
-        logger.info(`Created ${chunks.length} chunks from PDF`);
-
-        // Generate embeddings for all chunks
-        const embeddings = await EmbeddingService.generateEmbeddings(chunks);
-
-        // Prepare chunks with embeddings for storage
-        const chunksWithEmbeddings = chunks.map((chunk, index) => ({
-            file_id: fileData.id,
-            mindmap_id: mindmapId || null,
-            content: chunk,
-            embedding: JSON.stringify(embeddings[index]),
-            chunk_index: index,
-            metadata: {
-                source: fileName,
-                total_pages: pdfData.numpages,
-            },
-        }));
-
-        // Store chunks in database
-        const { error: insertError } = await supabase
-            .from('document_chunks')
-            .insert(chunksWithEmbeddings);
-
-        if (insertError) {
-            logger.error({ insertError }, 'Failed to insert chunks');
-            throw new Error('Failed to store document chunks');
-        }
-
-        logger.info(`Successfully ingested PDF with ${chunks.length} chunks`);
-
-        return {
-            file_id: fileData.id,
-            chunks_created: chunks.length,
-        };
-    } catch (error: any) {
-        logger.error({ error, fileName }, 'PDF ingestion failed');
-        throw new Error(`Failed to process PDF: ${error.message}`);
     }
-};
+}
 
 /**
- * Ingest plain text document
+ * Chat with RAG context (streaming)
+ * Based on GitHub reference: supabase/functions/chat/index.ts
  */
-export const ingestDocument = async (params: {
-    userId: string;
-    text?: string;
-    fileBuffer?: Buffer;
-    fileName?: string;
-    mindmapId?: string;
-    supabase: SupabaseClient;
-}): Promise<IngestResult> => {
-    const { userId, text, fileBuffer, fileName, mindmapId, supabase } = params;
+export async function* ragChat(params: ServiceParams<{
+    question: string;
+    documentId?: string;
+    matchThreshold: number;
+    matchCount: number;
+}>): AsyncGenerator<string, void, unknown> {
+    const { userId, accessToken, question, documentId, matchThreshold, matchCount } = params;
+    const supabase = createSupabaseClient(accessToken);
 
-    let content = text || '';
-
-    // Route to PDF ingestion if PDF file
-    if (fileBuffer && fileName) {
-        if (fileName.toLowerCase().endsWith('.pdf')) {
-            return ingestPdfDocument({ userId, fileBuffer, fileName, mindmapId, supabase });
-        } else if (fileName.endsWith('.txt')) {
-            content = fileBuffer.toString('utf-8');
-        } else {
-            throw new ValidationError('Only TXT and PDF files supported');
-        }
-    }
-
-    if (!content || content.trim().length === 0) {
-        throw new ValidationError('No content to ingest');
-    }
-
-    // Create file record
-    const { data: fileData, error: fileError } = await supabase
-        .from('files')
-        .insert({
-            user_id: userId,
-            path: fileName || `text-${Date.now()}.txt`,
-        })
-        .select()
-        .single();
-
-    if (fileError || !fileData) {
-        logger.error({ fileError }, 'Failed to create file record');
-        throw new Error('Failed to create file record');
-    }
-
-    // Chunk text
-    const chunks = await chunkText(content, {
-        chunkSize: env.CHUNK_SIZE,
-        chunkOverlap: env.CHUNK_OVERLAP,
-    });
-
-    logger.info(`Created ${chunks.length} chunks from text`);
-
-    // Generate embeddings
-    const embeddings = await EmbeddingService.generateEmbeddings(chunks);
-
-    // Prepare chunks with embeddings
-    const chunksWithEmbeddings = chunks.map((chunk, index) => ({
-        file_id: fileData.id,
-        mindmap_id: mindmapId || null,
-        content: chunk,
-        embedding: JSON.stringify(embeddings[index]),
-        chunk_index: index,
-    }));
-
-    // Store chunks
-    const { error: insertError } = await supabase
-        .from('document_chunks')
-        .insert(chunksWithEmbeddings);
-
-    if (insertError) {
-        logger.error({ insertError }, 'Failed to insert chunks');
-        throw new Error('Failed to store document chunks');
-    }
-
-    logger.info(`Successfully ingested text with ${chunks.length} chunks`);
-
-    return {
-        file_id: fileData.id,
-        chunks_created: chunks.length,
-    };
-};
-
-/**
- * Retrieve relevant chunks using vector similarity search with pgvector
- */
-export const retrieveRelevantChunks = async (
-    question: string,
-    userId: string,
-    fileId: string | undefined,
-    mindmapId: string | undefined,
-    supabase: SupabaseClient
-): Promise<Array<{ id: string; content: string; similarity: number }>> => {
+    // Generate embedding for the question
     const questionEmbedding = await EmbeddingService.generateEmbedding(question);
-    const embeddingArray = `[${questionEmbedding.join(',')}]`;
 
-    const { data: chunks, error } = await supabase
-        .rpc('find_similar_chunks', {
-            query_embedding: embeddingArray,
-            file_id: fileId || null,
-            mindmap_id: mindmapId || null,
-            top_k: env.TOP_K_CHUNKS,
-        });
-
-    if (error) {
-        logger.error({ error }, 'Failed to retrieve chunks with pgvector');
-        throw new Error('Failed to retrieve document chunks');
-    }
-
-    if (!chunks || chunks.length === 0) {
-        return [];
-    }
-
-    return chunks.map((chunk: any) => ({
-        id: chunk.id,
-        content: chunk.content,
-        similarity: chunk.similarity,
-    }));
-};
-
-/**
- * Get conversation history
- */
-export const getConversationHistory = async (
-    conversationId: string,
-    userId: string,
-    supabase: SupabaseClient
-): Promise<ChatMessage[]> => {
-    const { data: messages, error } = await supabase
-        .from('messages')
-        .select('role, content')
-        .eq('conversation_id', conversationId)
-        .order('created_at', { ascending: true });
-
-    if (error) {
-        logger.error({ error }, 'Failed to get conversation history');
-        throw new Error('Failed to retrieve conversation history');
-    }
-
-    return messages as ChatMessage[];
-};
-
-/**
- * Save message to conversation
- */
-export const saveMessage = async (
-    conversationId: string,
-    role: 'user' | 'assistant',
-    content: string,
-    metadata: Record<string, any> | undefined,
-    supabase: SupabaseClient
-): Promise<void> => {
-    const { error } = await supabase.from('messages').insert({
-        conversation_id: conversationId,
-        role,
-        content,
-        metadata: metadata || {},
-    });
-
-    if (error) {
-        logger.error({ error }, 'Failed to save message');
-        throw new Error('Failed to save message');
-    }
-};
-
-/**
- * Create or get conversation
- */
-export const getOrCreateConversation = async (
-    userId: string,
-    conversationId: string | undefined,
-    supabase: SupabaseClient
-): Promise<string> => {
-    if (conversationId) {
-        const { data, error } = await supabase
-            .from('conversations')
-            .select('id')
-            .eq('id', conversationId)
-            .eq('user_id', userId)
-            .single();
-
-        if (error || !data) {
-            throw new NotFoundError('Conversation not found');
-        }
-
-        return conversationId;
-    }
-
-    // Create new conversation
-    const { data, error } = await supabase
-        .from('conversations')
-        .insert({
-            user_id: userId,
-            context_mode: 'rag',
+    // Search for similar sections using match_document_sections
+    const { data, error: matchError } = await supabase
+        .rpc('match_document_sections', {
+            embedding: questionEmbedding,
+            match_threshold: matchThreshold,
+            match_count: matchCount,
+            filter_document_id: documentId || null,
         })
-        .select()
-        .single();
+        .select('content');
 
-    if (error || !data) {
-        logger.error({ error }, 'Failed to create conversation');
-        throw new Error('Failed to create conversation');
+    if (matchError) {
+        logger.error({ matchError, userId, question }, 'Error matching document sections');
+        throw new Error('There was an error reading your documents, please try again.');
     }
 
-    return data.id;
-};
+    const documents = (data || []) as Array<{ content: string }>;
 
-/**
- * Generate streaming chat completion with RAG context
- */
-export const generateChatCompletion = async function* (
-    question: string,
-    userId: string,
-    conversationId: string | undefined,
-    fileId: string | undefined,
-    mindmapId: string | undefined,
-    supabase: SupabaseClient
-): AsyncGenerator<string, void, unknown> {
-    const convId = await getOrCreateConversation(userId, conversationId, supabase);
+    // Build context from matched documents
+    const injectedDocs = documents.length > 0
+        ? documents.map(({ content }) => content).join('\n\n')
+        : 'No documents found';
 
-    // Retrieve relevant chunks
-    const relevantChunks = await retrieveRelevantChunks(
-        question,
-        userId,
-        fileId,
-        mindmapId,
-        supabase
-    );
-
-    // Get conversation history
-    const history = await getConversationHistory(convId, userId, supabase);
-
-    // Build context from chunks
-    const context = relevantChunks.map((chunk) => chunk.content).join('\\n\\n');
+    logger.info({ userId, question, matchedDocs: documents.length }, 'RAG context built');
 
     // Build messages for OpenAI
-    const messages: ChatMessage[] = [
+    const completionMessages = [
         {
-            role: 'system',
-            content: `You are a helpful AI assistant. Answer the user's question based on the following context. If the context doesn't contain relevant information, say so.
+            role: 'user' as const,
+            content: `You're an AI assistant who answers questions about documents.
 
-Context:
-${context}`,
+                You're a chat bot, so keep your replies succinct.
+
+                You're only allowed to use the documents below to answer the question.
+
+                If the question isn't related to these documents, say:
+                "Sorry, I couldn't find any information on that."
+
+                If the information isn't available in the below documents, say:
+                "Sorry, I couldn't find any information on that."
+
+                Do not go off topic.
+
+                Documents:
+                ${injectedDocs}
+            `,
         },
-        ...history,
         {
-            role: 'user',
+            role: 'user' as const,
             content: question,
         },
     ];
 
-    // Save user message
-    await saveMessage(convId, 'user', question, {
-        relevant_chunks: relevantChunks.map((c) => ({ id: c.id, similarity: c.similarity })),
-    }, supabase);
-
     // Stream response from OpenAI
-    const stream = await openai.chat.completions.create({
+    const completionStream = await openai.chat.completions.create({
         model: OPENAI_CONFIG.chatModel,
-        messages: messages as any,
-        stream: true,
+        messages: completionMessages,
         max_tokens: OPENAI_CONFIG.maxTokens,
-        temperature: OPENAI_CONFIG.temperature,
+        temperature: 0,
+        stream: true,
     });
 
-    let fullResponse = '';
-
-    for await (const chunk of stream) {
+    for await (const chunk of completionStream) {
         const content = chunk.choices[0]?.delta?.content || '';
         if (content) {
-            fullResponse += content;
             yield content;
         }
     }
+}
 
-    // Save assistant message
-    await saveMessage(convId, 'assistant', fullResponse, undefined, supabase);
+/**
+ * List user's documents
+ */
+export const listDocuments = async (params: ServiceParams): Promise<Document[]> => {
+    const { userId, accessToken } = params;
+    const supabase = createSupabaseClient(accessToken);
+
+    const { data, error } = await supabase
+        .from('documents')
+        .select('*')
+        .eq('created_by', userId)
+        .order('created_at', { ascending: false });
+
+    if (error) {
+        logger.error({ error, userId }, 'Failed to list documents');
+        throw new Error('Failed to list documents');
+    }
+
+    return data || [];
+};
+
+/**
+ * Get document with sections
+ */
+export const getDocument = async (params: ServiceParams<{
+    documentId: string;
+}>): Promise<Document & { sections: DocumentSection[] }> => {
+    const { userId, accessToken, documentId } = params;
+    const supabase = createSupabaseClient(accessToken);
+
+    // Get document
+    const { data: document, error: docError } = await supabase
+        .from('documents')
+        .select('*')
+        .eq('id', documentId)
+        .eq('created_by', userId)
+        .single();
+
+    if (docError || !document) {
+        logger.error({ docError, userId, documentId }, 'Document not found');
+        throw new NotFoundError('Document not found');
+    }
+
+    // Get sections
+    const { data: sections, error: sectionsError } = await supabase
+        .from('document_sections')
+        .select('*')
+        .eq('document_id', documentId)
+        .order('id', { ascending: true });
+
+    if (sectionsError) {
+        logger.error({ sectionsError, userId, documentId }, 'Failed to get sections');
+        throw new Error('Failed to retrieve sections');
+    }
+
+    return {
+        ...document,
+        sections: (sections as DocumentSection[]) || [],
+    };
+};
+
+/**
+ * Delete document (cascades to sections)
+ */
+export const deleteDocument = async (params: ServiceParams<{
+    documentId: string;
+}>): Promise<void> => {
+    const { userId, accessToken, documentId } = params;
+    const supabase = createSupabaseClient(accessToken);
+
+    const { error } = await supabase
+        .from('documents')
+        .delete()
+        .eq('id', documentId)
+        .eq('created_by', userId);
+
+    if (error) {
+        logger.error({ error, userId, documentId }, 'Failed to delete document');
+        throw new Error('Failed to delete document');
+    }
+
+    logger.info({ userId, documentId }, 'Document deleted successfully');
 };

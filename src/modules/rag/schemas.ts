@@ -1,11 +1,17 @@
 import { z } from 'zod';
 
-export const chatSchema = z.object({
-    question: z.string().min(1, 'Question is required'),
-    file_id: z.uuid('Invalid file ID').optional(),
-    mindmap_id: z.uuid('Invalid mindmap ID').optional(),
-    stream: z.boolean().default(true),
-    top_k: z.number().int().positive().max(20).default(5).optional(),
+// Schema for processing a document (splitting and embedding)
+export const processDocumentSchema = z.object({
+    document_id: z.uuid({ message: 'Invalid document ID format' }),
 });
 
-export type ChatInput = z.infer<typeof chatSchema>;
+// Schema for RAG chat query
+export const ragChatSchema = z.object({
+    question: z.string().min(1, { message: 'Question cannot be empty' }),
+    document_id: z.uuid({ message: 'Invalid document ID format' }).optional(),
+    match_threshold: z.number().min(0).max(1).default(0.8),
+    match_count: z.number().int().min(1).max(20).default(5),
+});
+
+export type ProcessDocumentInput = z.infer<typeof processDocumentSchema>;
+export type RagChatInput = z.infer<typeof ragChatSchema>;

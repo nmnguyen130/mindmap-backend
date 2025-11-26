@@ -7,7 +7,7 @@ export interface Mindmap {
     owner_id: string;
     title: string;
     version: number;
-    source_file_id: string | null;
+    source_document_id: string | null;
     created_at: string;
     updated_at: string;
 }
@@ -40,9 +40,9 @@ type ServiceParams<T = {}> = {
  */
 export const createMindmap = async (params: ServiceParams<{
     title: string;
-    sourceFileId?: string;
+    sourceDocumentId?: string;
 }>): Promise<Mindmap> => {
-    const { userId, accessToken, title, sourceFileId } = params;
+    const { userId, accessToken, title, sourceDocumentId } = params;
     const supabase = createSupabaseClient(accessToken);
 
     const { data, error } = await supabase
@@ -50,7 +50,7 @@ export const createMindmap = async (params: ServiceParams<{
         .insert({
             owner_id: userId,
             title,
-            source_file_id: sourceFileId || null,
+            source_document_id: sourceDocumentId || null,
         })
         .select()
         .single();

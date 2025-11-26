@@ -1,35 +1,35 @@
 import { Router } from 'express';
 import { authenticate } from '@/middlewares/auth';
 import { validate } from '@/middlewares/validation';
-import { chatLimiter } from '@/middlewares/rateLimiter';
-import { chatSchema } from './schemas';
+import { processDocumentSchema, ragChatSchema } from './schemas';
 import * as ragController from './controller';
 
 const router = Router();
 
-// POST /api/chat - Chat with streaming
+// All routes require authentication
+router.use(authenticate);
+
+// POST /api/rag/process - Process a document
+router.post(
+    '/process',
+    validate(processDocumentSchema, 'body'),
+    ragController.process
+);
+
+// POST /api/rag/chat - RAG chat (streaming)
 router.post(
     '/chat',
-    authenticate,
-    chatLimiter,
-    validate(chatSchema, 'body'),
+    validate(ragChatSchema, 'body'),
     ragController.chat
 );
 
-// POST /api/query - Query without streaming
-router.post(
-    '/query',
-    authenticate,
-    chatLimiter,
-    validate(chatSchema, 'body'),
-    ragController.query
-);
+// GET /api/rag/documents - List all user documents
+router.get('/documents', ragController.list);
 
-// GET /api/rag/status - RAG service status
-router.get(
-    '/status',
-    authenticate,
-    ragController.getStatus
-);
+// GET /api/rag/documents/:id - Get document with sections
+router.get('/documents/:id', ragController.get);
+
+// DELETE /api/rag/documents/:id - Delete document
+router.delete('/documents/:id', ragController.remove);
 
 export default router;

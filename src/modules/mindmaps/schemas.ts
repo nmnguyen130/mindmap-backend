@@ -4,7 +4,7 @@ export const createMindmapSchema = z.object({
     title: z.string()
         .min(1, { error: 'Title is required' })
         .max(255, { error: 'Title must not exceed 255 characters' }),
-    source_file_id: z.uuid({ error: 'Invalid source file ID format' }).optional(),
+    source_document_id: z.uuid({ message: 'Invalid source document ID' }).optional(),
 });
 
 export const updateMindmapSchema = z.object({

@@ -2,88 +2,110 @@ import { Response } from 'express';
 import { AuthRequest } from '@/middlewares/auth';
 import * as ragService from './service';
 import { success } from '@/utils/response';
-import { ChatInput } from './schemas';
+import { ProcessDocumentInput, RagChatInput } from './schemas';
 
 /**
- * POST /api/chat
- * Chat with RAG context (streaming)
+ * POST /api/rag/process
+ */
+export const process = async (req: AuthRequest, res: Response) => {
+    const { user, accessToken } = req;
+    const body = req.body as ProcessDocumentInput;
+
+    const result = await ragService.processDocument({
+        userId: user.id,
+        accessToken,
+        documentId: body.document_id,
+    });
+
+    success(res, result);
+};
+
+/**
+ * POST /api/rag/chat
+ * Stream RAG chat response
  */
 export const chat = async (req: AuthRequest, res: Response) => {
     const { user, accessToken } = req;
-    const body = req.body as ChatInput;
+    const body = req.body as RagChatInput;
 
-    // Set headers for SSE
+    // Set headers for Server-Sent Events
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
 
-    const stream = ragService.generateChatCompletion({
-        userId: user.id,
-        accessToken,
-        question: body.question,
-        conversationId: undefined,
-        file_id: body.file_id,
-        mindmap_id: body.mindmap_id,
-    });
+    try {
+        const stream = ragService.ragChat({
+            userId: user.id,
+            accessToken,
+            question: body.question,
+            documentId: body.document_id,
+            matchThreshold: body.match_threshold,
+            matchCount: body.match_count,
+        });
 
-    for await (const chunk of stream) {
-        res.write(`data: ${JSON.stringify({ content: chunk })}\\n\\n`);
+        for await (const chunk of stream) {
+            res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
+        }
+
+        res.write('data: [DONE]\n\n');
+        res.end();
+    } catch (err: any) {
+        res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+        res.end();
     }
-
-    res.write('data: [DONE]\\n\\n');
-    res.end();
 };
 
 /**
- * POST /api/query
- * Query RAG system without streaming
+ * GET /api/rag/documents
  */
-export const query = async (
-    req: AuthRequest,
-    res: Response,
-): Promise<void> => {
+export const list = async (req: AuthRequest, res: Response) => {
     const { user, accessToken } = req;
-    const body = req.body as ChatInput;
 
-    const stream = ragService.generateChatCompletion({
+    const documents = await ragService.listDocuments({
         userId: user.id,
         accessToken,
-        question: body.question,
-        conversationId: undefined,
-        file_id: body.file_id,
-        mindmap_id: body.mindmap_id,
     });
 
-    let fullResponse = '';
-    for await (const chunk of stream) {
-        fullResponse += chunk;
-    }
-
-    success(res, { answer: fullResponse });
+    success(res, documents);
 };
 
 /**
- * GET /api/rag/status
- * Get RAG service status
+ * GET /api/rag/documents/:id
  */
-export const getStatus = async (
-    req: AuthRequest,
-    res: Response,
-): Promise<void> => {
+export const get = async (req: AuthRequest, res: Response) => {
     const { user, accessToken } = req;
+    const { id } = req.params;
 
-    const { data: chunksCount, error } = await req.supabase!
-        .from('document_chunks')
-        .select('*', { count: 'exact', head: true });
+    if (!id) {
+        throw new Error('Document ID is required');
+    }
 
-    const status = {
-        status: 'ready',
-        vectorStore: 'Supabase pgvector',
-        totalChunks: chunksCount || 0,
-        embeddingModel: 'Xenova/all-MiniLM-L6-v2',
-        chunkingMethod: 'sentence-based'
-    };
+    const document = await ragService.getDocument({
+        userId: user.id,
+        accessToken,
+        documentId: id,
+    });
 
-    success(res, status);
+    success(res, document);
+};
+
+/**
+ * DELETE /api/rag/documents/:id
+ */
+export const remove = async (req: AuthRequest, res: Response) => {
+    const { user, accessToken } = req;
+    const { id } = req.params;
+
+    if (!id) {
+        throw new Error('Document ID is required');
+    }
+
+    await ragService.deleteDocument({
+        userId: user.id,
+        accessToken,
+        documentId: id,
+    });
+
+    success(res, { deleted: true });
 };
