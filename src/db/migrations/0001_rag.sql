@@ -52,7 +52,7 @@ create table if not exists public.messages (
 -- Using inner product because embeddings are normalized (faster than cosine)
 create index if not exists idx_document_sections_embedding 
   on public.document_sections 
-  using hnsw (embedding vector_cosine_ops)
+  using hnsw (embedding vector_ip_ops)
   with (m=16, ef_construction=256);
 
 -- Standard indexes for lookups
@@ -234,12 +234,12 @@ begin
     ds.document_id,
     ds.content,
     ds.metadata,
-    (1 - (ds.embedding <=> query_embedding))::float as similarity
+    (ds.embedding <#> query_embedding)::float as similarity
   from public.document_sections ds
   where ds.embedding is not null
     and (filter_document_id is null or ds.document_id = filter_document_id)
-    and (1 - (ds.embedding <=> query_embedding)) > match_threshold
-  order by ds.embedding <=> query_embedding
+    and ds.embedding <#> query_embedding < -match_threshold
+  order by ds.embedding <#> query_embedding
   limit match_count;
 end;
 $$;

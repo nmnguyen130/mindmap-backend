@@ -5,6 +5,7 @@ import * as storageService from '@/services/storage.service';
 import { openai, OPENAI_CONFIG } from '@/config/openai';
 import { NotFoundError, ValidationError } from '@/utils/errors';
 import { logger } from '@/utils/logger';
+import { splitIntoSections, generateEmbeddings } from './helpers';
 
 export interface DocumentSection {
     id: string;
@@ -31,7 +32,6 @@ type ServiceParams<T = {}> = {
 /**
  * Create document from PDF - Complete workflow
  * Upload PDF → Create document → Process and generate embeddings → Optionally generate mindmap
- * Based on GitHub reference: chatgpt-your-files
  */
 export const createDocumentFromPdf = async (params: ServiceParams<{
     fileBuffer: Buffer;
@@ -178,87 +178,7 @@ export const createDocumentFromPdf = async (params: ServiceParams<{
 };
 
 /**
- * Split text into sections (simple paragraph-based)
- */
-function splitIntoSections(text: string): string[] {
-    // Split by double newlines (paragraphs)
-    const paragraphs = text
-        .split(/\n\s*\n/)
-        .map(p => p.trim())
-        .filter(p => p.length > 0);
-
-    const maxChunkSize = 1000;
-    const sections: string[] = [];
-    let currentSection = '';
-
-    for (const paragraph of paragraphs) {
-        if (currentSection.length + paragraph.length > maxChunkSize && currentSection.length > 0) {
-            sections.push(currentSection);
-            currentSection = paragraph;
-        } else {
-            currentSection += (currentSection ? '\n\n' : '') + paragraph;
-        }
-    }
-
-    if (currentSection) {
-        sections.push(currentSection);
-    }
-
-    return sections.length > 0 ? sections : [text];
-}
-
-/**
- * Generate embeddings for sections
- * Based on GitHub reference: supabase/functions/embed/index.ts
- */
-async function generateEmbeddings(params: ServiceParams<{
-    sectionIds: string[];
-}>): Promise<void> {
-    const { userId, accessToken, sectionIds } = params;
-    const supabase = createSupabaseClient(accessToken);
-
-    // Get sections without embeddings
-    const { data: sections, error: selectError } = await supabase
-        .from('document_sections')
-        .select('id, content')
-        .in('id', sectionIds)
-        .is('embedding', null);
-
-    if (selectError || !sections) {
-        logger.error({ selectError, userId }, 'Failed to fetch sections');
-        return;
-    }
-
-    for (const section of sections) {
-        if (!section.content) {
-            logger.error({ sectionId: section.id }, 'No content available');
-            continue;
-        }
-
-        try {
-            // Generate embedding
-            const embedding = await EmbeddingService.generateEmbedding(section.content);
-
-            // Update section with embedding
-            const { error: updateError } = await supabase
-                .from('document_sections')
-                .update({ embedding })
-                .eq('id', section.id);
-
-            if (updateError) {
-                logger.error({ updateError, sectionId: section.id }, 'Failed to save embedding');
-            } else {
-                logger.info({ sectionId: section.id }, 'Generated embedding');
-            }
-        } catch (err) {
-            logger.error({ err, sectionId: section.id }, 'Error generating embedding');
-        }
-    }
-}
-
-/**
  * Chat with RAG context (streaming)
- * Based on GitHub reference: supabase/functions/chat/index.ts
  */
 export async function* ragChat(params: ServiceParams<{
     question: string;

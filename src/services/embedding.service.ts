@@ -14,7 +14,7 @@ class EmbeddingService {
 
     // Model configuration
     private static readonly MODEL = {
-        name: 'Xenova/all-MiniLM-L6-v2',
+        name: 'Xenova/gte-small',
         dimensions: 384,
         batchSize: 8,
     } as const;
