@@ -31,3 +31,56 @@ Content-Type: application/json
 ### 3. Get Me
 GET {{baseUrl}}/auth/me
 Authorization: Bearer {{accessToken}}
+
+###
+
+### 4. Refresh Token
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refresh_token": "{{login.response.body.data.refresh_token}}"
+}
+
+###
+
+### 5. Forgot Password
+POST {{baseUrl}}/auth/forgot-password
+Content-Type: application/json
+
+{
+  "email": "test@gmail.com"
+}
+
+###
+
+### 6. Reset Password
+# Note: You need to get the access_token from the password reset link in your email
+# The reset link will contain access_token and refresh_token as URL fragments
+# Use that access_token here
+POST {{baseUrl}}/auth/reset-password
+Content-Type: application/json
+Authorization: Bearer YOUR_RESET_TOKEN_FROM_EMAIL
+
+{
+  "password": "NewPassword123!"
+}
+
+###
+
+### 7. Social Login - Google
+POST {{baseUrl}}/auth/social/google
+Content-Type: application/json
+
+###
+
+### 8. Social Login - Facebook
+POST {{baseUrl}}/auth/social/facebook
+Content-Type: application/json
+
+###
+
+### 9. OAuth Callback
+# Note: This endpoint is called by the OAuth provider after successful authentication
+# You can test it manually by providing access_token and refresh_token from OAuth flow
+GET {{baseUrl}}/auth/callback?access_token=YOUR_ACCESS_TOKEN&refresh_token=YOUR_REFRESH_TOKEN

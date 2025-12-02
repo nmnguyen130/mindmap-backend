@@ -81,7 +81,7 @@ true
 ###
 
 ### Document ID
-@documentId = {{uploadDocument.response.body.data.id}}
+@documentId = ebd75e05-7f31-4439-b64d-8d7b4564efb7
 
 ###
 

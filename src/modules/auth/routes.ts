@@ -2,7 +2,13 @@ import { Router } from 'express';
 import { authenticate } from '@/middlewares/auth';
 import { validate } from '@/middlewares/validation';
 import { authLimiter } from '@/middlewares/rateLimiter';
-import { registerSchema, loginSchema, refreshSchema } from './schemas';
+import {
+    registerSchema,
+    loginSchema,
+    refreshSchema,
+    forgotPasswordSchema,
+    resetPasswordSchema
+} from './schemas';
 import * as authController from './controller';
 
 const router = Router();
@@ -32,5 +38,33 @@ router.post(
 
 // GET /api/auth/me
 router.get('/me', authenticate, authController.me);
+
+// POST /api/auth/forgot-password
+router.post(
+    '/forgot-password',
+    authLimiter,
+    validate(forgotPasswordSchema, 'body'),
+    authController.forgotPassword
+);
+
+// POST /api/auth/reset-password
+router.post(
+    '/reset-password',
+    authenticate,
+    validate(resetPasswordSchema, 'body'),
+    authController.resetPassword
+);
+
+// POST /api/auth/social/:provider (google or facebook)
+router.post(
+    '/social/:provider',
+    authController.socialLogin
+);
+
+// GET /api/auth/callback (OAuth callback)
+router.get(
+    '/callback',
+    authController.socialCallback
+);
 
 export default router;

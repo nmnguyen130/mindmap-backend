@@ -24,13 +24,16 @@ export const create = async (req: AuthRequest, res: Response) => {
 
 /**
  * GET /api/mindmaps
+ * Supports incremental sync with ?since= query parameter
  */
 export const list = async (req: AuthRequest, res: Response) => {
     const { user, accessToken } = req;
+    const { since } = req.query;
 
     const mindmaps = await mindmapService.listMindmaps({
         userId: user.id,
         accessToken,
+        since: since ? String(since) : undefined,
     });
 
     success(res, mindmaps);

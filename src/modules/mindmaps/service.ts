@@ -66,15 +66,24 @@ export const createMindmap = async (params: ServiceParams<{
 /**
  * List user's mindmaps
  */
-export const listMindmaps = async (params: ServiceParams): Promise<Mindmap[]> => {
-    const { userId, accessToken } = params;
+export const listMindmaps = async (params: ServiceParams<{
+    since?: string;
+}>): Promise<Mindmap[]> => {
+    const { userId, accessToken, since } = params;
     const supabase = createSupabaseClient(accessToken);
 
-    const { data, error } = await supabase
+    let query = supabase
         .from('mindmaps')
         .select('*')
         .eq('owner_id', userId)
         .order('updated_at', { ascending: false });
+
+    // Support incremental sync
+    if (since) {
+        query = query.gt('updated_at', since);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
         logger.error({ error, userId }, 'Failed to list mindmaps');
@@ -124,26 +133,59 @@ export const getMindmap = async (params: ServiceParams<{
 };
 
 /**
- * Update mindmap
+ * Update mindmap with conflict detection
  */
 export const updateMindmap = async (params: ServiceParams<{
     mindmapId: string;
-    updates: Partial<Pick<Mindmap, 'title' | 'version'>>;
+    updates: Partial<Pick<Mindmap, 'title' | 'version'>> & { expected_version?: number };
 }>): Promise<Mindmap> => {
     const { userId, accessToken, mindmapId, updates } = params;
     const supabase = createSupabaseClient(accessToken);
 
+    // Get current version for conflict detection
+    const { data: current, error: fetchError } = await supabase
+        .from('mindmaps')
+        .select('version, updated_at')
+        .eq('id', mindmapId)
+        .eq('owner_id', userId)
+        .single();
+
+    if (fetchError || !current) {
+        logger.error({ error: fetchError, userId, mindmapId }, 'Mindmap not found');
+        throw new NotFoundError('Mindmap not found');
+    }
+
+    // Check for version conflict if expected_version is provided
+    if (updates.expected_version !== undefined && current.version !== updates.expected_version) {
+        const error: any = new Error('Version conflict detected');
+        error.status = 409;
+        error.conflict = {
+            local_version: updates.expected_version,
+            remote_version: current.version,
+            remote_updated_at: current.updated_at,
+        };
+        throw error;
+    }
+
+    // Prepare update data
+    const updateData: any = {};
+    if (updates.title !== undefined) updateData.title = updates.title;
+
+    // Auto-increment version
+    updateData.version = current.version + 1;
+    updateData.updated_at = new Date().toISOString();
+
     const { data, error } = await supabase
         .from('mindmaps')
-        .update(updates)
+        .update(updateData)
         .eq('id', mindmapId)
         .eq('owner_id', userId)
         .select()
         .single();
 
     if (error || !data) {
-        logger.error({ error, userId, mindmapId }, 'Mindmap update failed - not found');
-        throw new NotFoundError('Mindmap update failed - not found');
+        logger.error({ error, userId, mindmapId }, 'Mindmap update failed');
+        throw new Error('Mindmap update failed');
     }
 
     return data;

@@ -6,35 +6,38 @@ Production-ready backend for intelligent document analysis. Upload PDFs to autom
 
 ```mermaid
 flowchart TB
-    User[Client] -->|1. Upload PDF| API[POST /mindmaps/create-from-pdf]
+    User[Client] -->|1. Upload PDF| API[POST /api/rag/create-from-pdf]
     
-    API -->|PDF Buffer| PDFLoader[LangChain PDFLoader]
-    PDFLoader -->|Extract Text| Parse[PDF Text Content]
+    API -->|PDF Buffer| PDFParse[pdf-parse-new]
+    PDFParse -->|Extract Text| Text[PDF Text Content]
     API --> Store[Supabase Storage]
     
-    Parse --> LLM[OpenAI GPT-4]
-    LLM --> Mindmap[AI Mindmap Generation]
+    Text --> Chunk[Paragraph-based Chunking<br/>~1000 chars per chunk]
+    Chunk --> Sections[Document Sections]
     
-    Parse --> Chunk[RecursiveCharacterTextSplitter<br/>512 tokens, 100 overlap]
-    Chunk --> Embed[Local Embeddings<br/>all-MiniLM-L6-v2]
-    
-    Mindmap --> Map[Semantic Chunk-to-Node Mapping]
-    Embed --> Map
-    
-    Map --> DB[(PostgreSQL + pgvector)]
+    Sections --> DB[(PostgreSQL)]
     Store --> DB
+    
+    Sections -->|Background Task| Embed[Generate Embeddings<br/>all-MiniLM-L6-v2]
+    Embed --> Update[Update Sections with Vectors]
+    Update --> DB
+    
+    Text -->|Optional: generateMindmap=true| LLM[OpenAI GPT-4]
+    LLM --> Mindmap[AI Mindmap Generation]
     Mindmap --> DB
     
-    DB -->|2. Render| Frontend[Mindmap Visualization]
-    Frontend -->|3. Click Node| NodeAPI[POST /nodes/:id/chat]
-    NodeAPI --> Retrieve[Get Node Chunks]
-    Retrieve --> RAG[Scoped RAG Query]
-    RAG -->|4. Stream Response| Answer[AI Answer]
+    DB -->|2. Query| ChatAPI[POST /api/rag/chat]
+    ChatAPI --> Question[User Question]
+    Question --> QueryEmbed[Generate Question Embedding]
+    QueryEmbed --> Search[Vector Similarity Search<br/>pgvector + HNSW]
+    Search --> Context[Retrieve Top K Chunks]
+    Context --> RAG[RAG with OpenAI]
+    RAG -->|3. Stream Response| Answer[AI Answer]
     
-    style PDFLoader fill:#FFD700
+    style PDFParse fill:#FFD700
     style API fill:#4CAF50
     style Mindmap fill:#2196F3
-    style NodeAPI fill:#FF9800
+    style ChatAPI fill:#FF9800
     style DB fill:#9C27B0
 ```
 
@@ -106,9 +109,8 @@ MIN_SECTION_SIZE=200
 
 Run migrations in Supabase SQL Editor (in order):
 ```bash
-src/db/migrations/0001_init.sql
-src/db/migrations/0002_rls.sql
-src/db/migrations/0003_ai.sql
+src/db/migrations/0001_rag.sql
+src/db/migrations/0002_db.sql
 ```
 
 Create storage bucket in Supabase Dashboard:
@@ -137,25 +139,32 @@ npm start
 | POST   | `/api/auth/login`    | Login user        |
 | GET    | `/api/auth/me`       | Get current user  |
 
-### Mindmaps (Core Feature)
+### RAG & Documents (Core Feature)
 
-| Method | Endpoint                               | Description                                |
-| ------ | -------------------------------------- | ------------------------------------------ |
-| POST   | `/api/mindmaps/create-from-pdf`        | **Upload PDF → Generate mindmap + chunks** |
-| POST   | `/api/mindmaps/:id/nodes/:nodeId/chat` | **Chat with specific node (scoped RAG)**   |
-| GET    | `/api/mindmaps`                        | List user mindmaps                         |
-| GET    | `/api/mindmaps/:id`                    | Get mindmap with full structure            |
-| PUT    | `/api/mindmaps/:id`                    | Update mindmap                             |
-| DELETE | `/api/mindmaps/:id`                    | Delete mindmap                             |
+| Method | Endpoint                      | Description                                           |
+| ------ | ----------------------------- | ----------------------------------------------------- |
+| POST   | `/api/rag/create-from-pdf`    | **Upload PDF → Generate chunks + optional mindmap**   |
+| POST   | `/api/rag/chat`               | **Chat with RAG context (streaming)**                 |
+| GET    | `/api/rag/documents`          | List user documents                                   |
+| GET    | `/api/rag/documents/:id`      | Get document with sections                            |
+| DELETE | `/api/rag/documents/:id`      | Delete document                                       |
 
-### RAG & Conversations
+### Mindmaps
 
-| Method | Endpoint                 | Description                       |
-| ------ | ------------------------ | --------------------------------- |
-| POST   | `/api/chat`              | Chat with streaming (all context) |
-| POST   | `/api/query`             | Query without streaming           |
-| GET    | `/api/conversations`     | List conversations                |
-| GET    | `/api/conversations/:id` | Get conversation with messages    |
+| Method | Endpoint            | Description                     |
+| ------ | ------------------- | ------------------------------- |
+| POST   | `/api/mindmaps`     | Create empty mindmap            |
+| GET    | `/api/mindmaps`     | List user mindmaps              |
+| GET    | `/api/mindmaps/:id` | Get mindmap with nodes          |
+| PUT    | `/api/mindmaps/:id` | Update mindmap                  |
+| DELETE | `/api/mindmaps/:id` | Delete mindmap                  |
+
+### Conversations
+
+| Method | Endpoint                 | Description                    |
+| ------ | ------------------------ | ------------------------------ |
+| GET    | `/api/conversations`     | List conversations             |
+| GET    | `/api/conversations/:id` | Get conversation with messages |
 
 ## Development Workflow
 
@@ -168,22 +177,24 @@ npm run dev
 
 ### PDF Processing
 
-✅ **Direct PDF processing** using LangChain PDFLoader - no external services required
-⚡ **Fast processing** - text extraction happens in Node.js process
+✅ **Direct PDF processing** using pdf-parse-new in Node.js - no external services required
+⚡ **Fast processing** - text extraction happens in the Node.js process
 🔧 **Simple architecture** - single Node.js application handles everything
+📦 **Background embeddings** - vector embeddings generated asynchronously after document creation
 
 ## Core Workflow
 
-### 1. Upload PDF & Create Mindmap
+### 1. Upload PDF & Create Document (with Optional Mindmap)
 
 **Request:**
 ```http
-POST /api/mindmaps/create-from-pdf
+POST /api/rag/create-from-pdf
 Authorization: Bearer {token}
 Content-Type: multipart/form-data
 
 file: document.pdf
 title: "Optional custom title"
+generateMindmap: true
 ```
 
 **Response:**
@@ -192,44 +203,52 @@ title: "Optional custom title"
   "success": true,
   "data": {
     "id": "uuid",
-    "title": "Building Efficient SLM",
-    "mindmap_data": {
+    "name": "Building Efficient SLM",
+    "storage_object_id": "uuid",
+    "sections_created": 45,
+    "created_at": "2024-01-01T00:00:00Z",
+    "mindmap": {
+      "id": "uuid",
       "title": "Building Efficient SLM",
-      "central_topic": "Efficient Language Models",
-      "nodes": [
-        {
-          "id": "node-0",
-          "label": "Efficient SLM Development",
-          "keywords": ["efficiency", "optimization"],
-          "level": 0,
-          "parent_id": null
-        }
-      ],
-      "edges": [
-        {
-          "from": "node-0",
-          "to": "node-1",
-          "relationship": "contains"
-        }
-      ]
-    },
-    "chunks_created": 45,
-    "nodes_count": 8
+      "mindmap_data": {
+        "title": "Building Efficient SLM",
+        "central_topic": "Efficient Language Models",
+        "nodes": [
+          {
+            "id": "node-0",
+            "label": "Efficient SLM Development",
+            "keywords": ["efficiency", "optimization"],
+            "level": 0,
+            "parent_id": null
+          }
+        ],
+        "edges": [
+          {
+            "from": "node-0",
+            "to": "node-1",
+            "relationship": "contains"
+          }
+        ]
+      },
+      "nodes_count": 8
+    }
   }
 }
 ```
 
-### 2. Chat with Node (Scoped RAG)
+### 2. Chat with RAG Context
 
 **Request:**
 ```http
-POST /api/mindmaps/{mindmapId}/nodes/node-1/chat
+POST /api/rag/chat
 Authorization: Bearer {token}
 Content-Type: application/json
 
 {
   "question": "What are the key components?",
-  "stream": true
+  "document_id": "uuid",
+  "match_threshold": 0.78,
+  "match_count": 5
 }
 ```
 
@@ -273,8 +292,9 @@ interface MindmapEdge {
 - **Runtime**: Node.js 20+ with TypeScript
 - **Framework**: Express.js 5
 - **Database**: Supabase (PostgreSQL + pgvector)
-- **AI**: OpenAI GPT-4 for chat, all-MiniLM-L6-v2 for embeddings
-- **PDF Processing**: Python microservice (marker-pdf with lazy loading)
+- **AI**: OpenAI GPT-4 for chat
+- **Embeddings**: Local all-MiniLM-L6-v2 via Transformers.js
+- **PDF Processing**: pdf-parse-new (in-process, Node.js)
 - **Storage**: Supabase Storage
 - **Security**: Helmet, CORS, RLS, Rate Limiting
 
@@ -284,32 +304,31 @@ interface MindmapEdge {
 backend/
 ├── src/
 │   ├── config/           # Environment & API configs
-│   ├── db/migrations/    # SQL migrations
+│   ├── db/migrations/    # SQL migrations (0001_rag.sql, 0002_db.sql)
 │   ├── middlewares/      # Auth, validation, rate limiting
 │   ├── modules/
 │   │   ├── auth/         # Authentication
-│   │   ├── mindmaps/     # Mindmap CRUD & unified workflow
-│   │   ├── rag/          # RAG chat endpoints
+│   │   ├── mindmaps/     # Mindmap CRUD operations
+│   │   ├── rag/          # PDF processing, RAG chat, documents
 │   │   └── conversations/# Chat history
-│   ├── services/         # LLM, Storage, Embedding, Python client
-│   ├── utils/            # Helpers (chunking, similarity)
+│   ├── services/         # LLM, Storage, Embedding
+│   ├── utils/            # Helpers (errors, logger, response)
 │   └── server.ts         # Entry point
-├── python-service/       # PDF to Markdown microservice
 └── tests/                # API tests
 ```
 
 ### How It Works
 
-**Semantic Chunk-to-Node Mapping:**
-1. Generate node embeddings from label + keywords
-2. Compare with chunk embeddings via cosine similarity
-3. Link each chunk to top 2 matching nodes (threshold: 0.55)
-4. Unmatched chunks fallback to root node
+**Paragraph-Based Chunking:**
+1. Split PDF text by paragraph breaks (double newlines)
+2. Combine paragraphs into ~1000 character chunks
+3. Store as document_sections with metadata
+4. Generate embeddings asynchronously in background
 
 **Vector Search:**
 - Uses pgvector with HNSW index
-- Index type: `vector_cosine_ops`
-- Parameters: `m=16, ef_construction=64`
+- Index type: `vector_ip_ops` (inner product for normalized vectors)
+- Parameters: `m=16, ef_construction=256`
 - Search time: ~5ms for 10k+ chunks
 
 ## Deployment

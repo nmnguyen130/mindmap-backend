@@ -108,3 +108,89 @@ export const getCurrentUser = async (accessToken: string) => {
         email: data.user.email!,
     };
 };
+
+/**
+ * Forgot password - Send password reset email
+ */
+export const forgotPassword = async (email: string, redirectTo: string): Promise<{ message: string }> => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo,
+    });
+
+    if (error) {
+        logger.error({ error }, 'Forgot password request failed');
+        throw new Error(error.message);
+    }
+
+    return {
+        message: 'Password reset email sent successfully',
+    };
+};
+
+/**
+ * Reset password - Update user password (requires authenticated session from reset link)
+ */
+export const resetPassword = async (accessToken: string, newPassword: string): Promise<{ message: string }> => {
+    // Create authenticated Supabase client with the access token
+    const { data, error } = await supabase.auth.updateUser(
+        { password: newPassword },
+    );
+
+    if (error) {
+        logger.error({ error }, 'Password reset failed');
+        throw new AuthenticationError('Failed to reset password');
+    }
+
+    return {
+        message: 'Password reset successfully',
+    };
+};
+
+/**
+ * Initiate social login (Google or Facebook)
+ */
+export const socialLogin = async (
+    provider: 'google' | 'facebook',
+    redirectTo: string
+): Promise<{ url: string }> => {
+    const { data, error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+            redirectTo,
+        },
+    });
+
+    if (error || !data.url) {
+        logger.error({ error, provider }, 'Social login initiation failed');
+        throw new Error(`Failed to initiate ${provider} login`);
+    }
+
+    return {
+        url: data.url,
+    };
+};
+
+/**
+ * Handle OAuth callback - Extract session from OAuth callback
+ */
+export const handleOAuthCallback = async (
+    accessToken: string,
+    refreshToken: string
+): Promise<AuthResult> => {
+    // Get user info using the access token
+    const { data: userData, error: userError } = await supabase.auth.getUser(accessToken);
+
+    if (userError || !userData.user) {
+        logger.error({ error: userError }, 'OAuth callback: failed to get user');
+        throw new AuthenticationError('Failed to authenticate with OAuth provider');
+    }
+
+    return {
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        user: {
+            id: userData.user.id,
+            email: userData.user.email!,
+        },
+    };
+};
