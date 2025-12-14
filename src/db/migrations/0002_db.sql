@@ -16,8 +16,8 @@ create table if not exists public.mindmaps (
   version int not null default 1 check (version > 0),
   source_document_id uuid references public.documents(id) on delete set null,
   mindmap_data jsonb default '{}'::jsonb,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  created_at bigint not null default floor(extract(epoch from now()) * 1000)::bigint,
+  updated_at bigint not null default floor(extract(epoch from now()) * 1000)::bigint
 );
 
 -- Mindmap nodes: individual nodes within a mindmap
@@ -31,8 +31,8 @@ create table if not exists public.mindmap_nodes (
   children_order text[] not null default '{}',  -- Child node IDs in display order
   collapsed boolean default false,
   data jsonb default '{}'::jsonb,  -- Node-specific data (styles, icons, etc.)
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  created_at bigint not null default floor(extract(epoch from now()) * 1000)::bigint,
+  updated_at bigint not null default floor(extract(epoch from now()) * 1000)::bigint
 );
 
 
@@ -125,7 +125,7 @@ create policy "Users can delete nodes in their mindmaps"
 
 -- FUNCTIONS
 
--- Triggers for updated_at columns (function defined in 0001_rag.sql)
+-- Triggers for updated_at columns
 create trigger mindmaps_updated_at
   before update on public.mindmaps
   for each row execute function public.set_updated_at();

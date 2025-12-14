@@ -11,7 +11,7 @@ create table if not exists public.documents (
   name text not null,
   storage_object_id uuid not null references storage.objects (id) on delete cascade,
   created_by uuid not null references auth.users (id) on delete cascade default auth.uid(),
-  created_at timestamptz not null default now()
+  created_at bigint not null default floor(extract(epoch from now()) * 1000)::bigint
 );
 
 -- Document sections: stores chunked content with embeddings
@@ -21,7 +21,7 @@ create table if not exists public.document_sections (
   content text not null,
   embedding vector(384), -- all-MiniLM-L6-v2 embedding dimension
   metadata jsonb default '{}'::jsonb,
-  created_at timestamptz not null default now()
+  created_at bigint not null default floor(extract(epoch from now()) * 1000)::bigint
 );
 
 -- Conversations for chat history
@@ -31,8 +31,8 @@ create table if not exists public.conversations (
   title text,
   context_mode text default 'rag' check (context_mode in ('rag', 'normal')),
   metadata jsonb default '{}'::jsonb,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  created_at bigint not null default floor(extract(epoch from now()) * 1000)::bigint,
+  updated_at bigint not null default floor(extract(epoch from now()) * 1000)::bigint
 );
 
 -- Messages in conversations
@@ -42,7 +42,7 @@ create table if not exists public.messages (
   role text not null check (role in ('user', 'assistant', 'system')),
   content text not null,
   metadata jsonb default '{}'::jsonb,
-  created_at timestamptz not null default now()
+  created_at bigint not null default floor(extract(epoch from now()) * 1000)::bigint
 );
 
 
@@ -194,11 +194,11 @@ create policy "Users can delete messages in their conversations"
 
 -- FUNCTIONS
 
--- Trigger function for updating updated_at timestamp
+-- Trigger function for updating updated_at timestamp (milliseconds)
 create or replace function public.set_updated_at()
 returns trigger as $$
 begin
-  new.updated_at = now();
+  new.updated_at = floor(extract(epoch from now()) * 1000)::bigint;
   return new;
 end;
 $$ language plpgsql security definer;
