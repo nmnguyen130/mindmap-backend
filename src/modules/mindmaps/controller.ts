@@ -1,103 +1,146 @@
-import { Response } from 'express';
-import { AuthRequest } from '@/middlewares/auth';
-import { success } from '@/utils/response';
+import { Response } from "express";
+import { AuthRequest } from "@/middlewares/auth";
+import { success } from "@/utils/response";
 
-import * as mindmapService from './service';
-import { CreateMindmapInput, UpdateMindmapInput } from './schemas';
+import * as mindmapService from "./service";
+import { CreateMindmapInput, UpdateMindmapInput } from "./schemas";
 
-/**
- * POST /api/mindmaps
- */
-export const create = async (req: AuthRequest, res: Response) => {
-    const { user, accessToken } = req;
-    const body = req.body as CreateMindmapInput;
+// Transform frontend node format to backend format
+const transformNodes = (nodes?: CreateMindmapInput["nodes"]) => {
+  if (!nodes) return undefined;
+  return nodes.map((n) => ({
+    id: n.id,
+    label: n.label,
+    keywords: n.keywords ? JSON.stringify(n.keywords) : null,
+    level: n.level ?? 0,
+    parent_id: n.parent_id ?? null,
+    position_x: n.position?.x ?? 0,
+    position_y: n.position?.y ?? 0,
+    notes: n.notes ?? null,
+    version: n.version ?? 1,
+  }));
+};
 
-    const mindmap = await mindmapService.createMindmap({
-        userId: user.id,
-        accessToken,
-        title: body.title,
-        sourceDocumentId: body.source_document_id,
-    });
-
-    success(res, mindmap, 201);
+// Transform frontend connection format to backend format
+const transformConnections = (
+  connections?: CreateMindmapInput["connections"]
+) => {
+  if (!connections) return undefined;
+  return connections.map((c) => ({
+    id: c.id,
+    from_node_id: c.from,
+    to_node_id: c.to,
+    relationship: c.relationship ?? null,
+    version: c.version ?? 1,
+  }));
 };
 
 /**
- * GET /api/mindmaps
+ * POST /api/mindmaps - Create mindmap (with optional nodes/connections for sync)
+ */
+export const create = async (req: AuthRequest, res: Response) => {
+  const { user, accessToken } = req;
+  const body = req.body as CreateMindmapInput;
+
+  const mindmap = await mindmapService.createMindmap({
+    userId: user.id,
+    accessToken,
+    id: body.id,
+    title: body.title,
+    central_topic: body.central_topic,
+    summary: body.summary,
+    document_id: body.document_id ?? undefined,
+    nodes: transformNodes(body.nodes),
+    connections: transformConnections(body.connections),
+  });
+
+  success(res, mindmap, 201);
+};
+
+/**
+ * GET /api/mindmaps - List user's mindmaps
  * Supports incremental sync with ?since= query parameter
  */
 export const list = async (req: AuthRequest, res: Response) => {
-    const { user, accessToken } = req;
-    const { since } = req.query;
+  const { user, accessToken } = req;
+  const { since } = req.query;
 
-    const mindmaps = await mindmapService.listMindmaps({
-        userId: user.id,
-        accessToken,
-        since: since ? String(since) : undefined,
-    });
+  const mindmaps = await mindmapService.listMindmaps({
+    userId: user.id,
+    accessToken,
+    since: since ? String(since) : undefined,
+  });
 
-    success(res, mindmaps);
+  success(res, mindmaps);
 };
 
 /**
- * GET /api/mindmaps/:id
+ * GET /api/mindmaps/:id - Get mindmap with nodes and connections
  */
 export const get = async (req: AuthRequest, res: Response) => {
-    const { user, accessToken } = req;
-    const { id } = req.params;
+  const { user, accessToken } = req;
+  const { id } = req.params;
 
-    if (!id) {
-        throw new Error('Mindmap ID is required');
-    }
+  if (!id) {
+    throw new Error("Mindmap ID is required");
+  }
 
-    const mindmap = await mindmapService.getMindmap({
-        userId: user.id,
-        accessToken,
-        mindmapId: id,
-    });
+  const mindmap = await mindmapService.getMindmap({
+    userId: user.id,
+    accessToken,
+    mindmapId: id,
+  });
 
-    success(res, mindmap);
+  success(res, mindmap);
 };
 
 /**
- * PUT /api/mindmaps/:id
+ * PUT /api/mindmaps/:id - Update mindmap (with optional nodes/connections for sync)
  */
 export const update = async (req: AuthRequest, res: Response) => {
-    const { user, accessToken } = req;
-    const { id } = req.params;
+  const { user, accessToken } = req;
+  const { id } = req.params;
 
-    if (!id) {
-        throw new Error('Mindmap ID is required');
-    }
+  if (!id) {
+    throw new Error("Mindmap ID is required");
+  }
 
-    const body = req.body as UpdateMindmapInput;
+  const body = req.body as UpdateMindmapInput;
 
-    const mindmap = await mindmapService.updateMindmap({
-        userId: user.id,
-        accessToken,
-        mindmapId: id,
-        updates: body,
-    });
+  const mindmap = await mindmapService.updateMindmap({
+    userId: user.id,
+    accessToken,
+    mindmapId: id,
+    updates: {
+      title: body.title,
+      central_topic: body.central_topic,
+      summary: body.summary,
+      version: body.version,
+      expected_version: body.expected_version,
+      nodes: transformNodes(body.nodes),
+      connections: transformConnections(body.connections),
+    },
+  });
 
-    success(res, mindmap);
+  success(res, mindmap);
 };
 
 /**
- * DELETE /api/mindmaps/:id
+ * DELETE /api/mindmaps/:id - Soft delete mindmap
  */
 export const remove = async (req: AuthRequest, res: Response) => {
-    const { user, accessToken } = req;
-    const { id } = req.params;
+  const { user, accessToken } = req;
+  const { id } = req.params;
 
-    if (!id) {
-        throw new Error('Mindmap ID is required');
-    }
+  if (!id) {
+    throw new Error("Mindmap ID is required");
+  }
 
-    await mindmapService.deleteMindmap({
-        userId: user.id,
-        accessToken,
-        mindmapId: id,
-    });
+  await mindmapService.deleteMindmap({
+    userId: user.id,
+    accessToken,
+    mindmapId: id,
+  });
 
-    success(res, { deleted: true });
+  success(res, { deleted: true });
 };
