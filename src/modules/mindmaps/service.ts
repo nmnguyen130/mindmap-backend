@@ -2,7 +2,9 @@ import { createSupabaseClient } from "@/config/supabase";
 import { NotFoundError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 
-// Interfaces matching the database schema (aligned with frontend)
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+// TYPES
 export interface Mindmap {
   id: string;
   owner_id: string;
@@ -20,7 +22,7 @@ export interface MindmapNode {
   id: string;
   mindmap_id: string;
   label: string;
-  keywords: string | null; // JSON array as string
+  keywords: string | null;
   level: number;
   parent_id: string | null;
   position_x: number;
@@ -49,7 +51,6 @@ export interface MindmapWithNodes extends Mindmap {
   connections: Connection[];
 }
 
-// Input types for nodes/connections (without mindmap_id - added by service)
 export interface NodeInput {
   id: string;
   label: string;
@@ -75,8 +76,128 @@ type ServiceParams<T = {}> = {
   accessToken: string;
 } & T;
 
+// HELPER FUNCTIONS
+
 /**
- * Create new mindmap with optional nodes and connections
+ * Batch upsert nodes for a mindmap
+ */
+const upsertNodes = async (
+  supabase: SupabaseClient,
+  mindmapId: string,
+  nodes: NodeInput[]
+): Promise<void> => {
+  if (!nodes || nodes.length === 0) return;
+
+  const nodeRows = nodes.map((n) => ({
+    id: n.id,
+    mindmap_id: mindmapId,
+    label: n.label,
+    keywords: n.keywords,
+    level: n.level,
+    parent_id: n.parent_id,
+    position_x: n.position_x,
+    position_y: n.position_y,
+    notes: n.notes,
+    version: n.version || 1,
+    updated_at: Date.now(),
+  }));
+
+  const { error } = await supabase
+    .from("mindmap_nodes")
+    .upsert(nodeRows, { onConflict: "id" });
+
+  if (error) {
+    logger.error({ error, mindmapId }, "Failed to upsert nodes");
+  }
+};
+
+/**
+ * Batch upsert connections for a mindmap
+ */
+const upsertConnections = async (
+  supabase: SupabaseClient,
+  mindmapId: string,
+  connections: ConnectionInput[]
+): Promise<void> => {
+  if (!connections || connections.length === 0) return;
+
+  const connRows = connections.map((c) => ({
+    id: c.id,
+    mindmap_id: mindmapId,
+    from_node_id: c.from_node_id,
+    to_node_id: c.to_node_id,
+    relationship: c.relationship,
+    version: c.version || 1,
+    updated_at: Date.now(),
+  }));
+
+  const { error } = await supabase
+    .from("connections")
+    .upsert(connRows, { onConflict: "id" });
+
+  if (error) {
+    logger.error({ error, mindmapId }, "Failed to upsert connections");
+  }
+};
+
+/**
+ * Batch insert nodes (for create - no upsert)
+ */
+const insertNodes = async (
+  supabase: SupabaseClient,
+  mindmapId: string,
+  nodes: NodeInput[]
+): Promise<void> => {
+  if (!nodes || nodes.length === 0) return;
+
+  const nodeRows = nodes.map((n) => ({
+    id: n.id,
+    mindmap_id: mindmapId,
+    label: n.label,
+    keywords: n.keywords,
+    level: n.level,
+    parent_id: n.parent_id,
+    position_x: n.position_x,
+    position_y: n.position_y,
+    notes: n.notes,
+    version: n.version || 1,
+  }));
+
+  const { error } = await supabase.from("mindmap_nodes").insert(nodeRows);
+
+  if (error) {
+    logger.error({ error, mindmapId }, "Failed to insert nodes");
+  }
+};
+
+/**
+ * Batch insert connections (for create - no upsert)
+ */
+const insertConnections = async (
+  supabase: SupabaseClient,
+  mindmapId: string,
+  connections: ConnectionInput[]
+): Promise<void> => {
+  if (!connections || connections.length === 0) return;
+
+  const connRows = connections.map((c) => ({
+    id: c.id,
+    mindmap_id: mindmapId,
+    from_node_id: c.from_node_id,
+    to_node_id: c.to_node_id,
+    relationship: c.relationship,
+    version: c.version || 1,
+  }));
+
+  const { error } = await supabase.from("connections").insert(connRows);
+
+  if (error) {
+    logger.error({ error, mindmapId }, "Failed to insert connections");
+  }
+};
+
+/**
+ * Create new mindmap with optional nodes and connections (INSERT only)
  */
 export const createMindmap = async (
   params: ServiceParams<{
@@ -101,24 +222,18 @@ export const createMindmap = async (
     connections,
   } = params;
   const supabase = createSupabaseClient(accessToken);
-
   const mindmapId = id || crypto.randomUUID();
 
-  // Use upsert to handle both create and update (sync-friendly)
   const { data, error } = await supabase
     .from("mindmaps")
-    .upsert(
-      {
-        id: mindmapId,
-        owner_id: userId,
-        title,
-        central_topic: central_topic || null,
-        summary: summary || null,
-        document_id: document_id || null,
-        updated_at: Date.now(),
-      },
-      { onConflict: "id" }
-    )
+    .insert({
+      id: mindmapId,
+      owner_id: userId,
+      title,
+      central_topic: central_topic || null,
+      summary: summary || null,
+      document_id: document_id || null,
+    })
     .select()
     .single();
 
@@ -127,50 +242,9 @@ export const createMindmap = async (
     throw new Error("Failed to create mindmap");
   }
 
-  // Insert nodes if provided
-  if (nodes && nodes.length > 0) {
-    const nodeRows = nodes.map((n) => ({
-      id: n.id,
-      mindmap_id: mindmapId,
-      label: n.label,
-      keywords: n.keywords,
-      level: n.level,
-      parent_id: n.parent_id,
-      position_x: n.position_x,
-      position_y: n.position_y,
-      notes: n.notes,
-      version: n.version || 1,
-    }));
-
-    const { error: nodeError } = await supabase
-      .from("mindmap_nodes")
-      .insert(nodeRows);
-    if (nodeError) {
-      logger.error({ error: nodeError, mindmapId }, "Failed to insert nodes");
-    }
-  }
-
-  // Insert connections if provided
-  if (connections && connections.length > 0) {
-    const connRows = connections.map((c) => ({
-      id: c.id,
-      mindmap_id: mindmapId,
-      from_node_id: c.from_node_id,
-      to_node_id: c.to_node_id,
-      relationship: c.relationship,
-      version: c.version || 1,
-    }));
-
-    const { error: connError } = await supabase
-      .from("connections")
-      .insert(connRows);
-    if (connError) {
-      logger.error(
-        { error: connError, mindmapId },
-        "Failed to insert connections"
-      );
-    }
-  }
+  // Insert nodes and connections using helpers
+  await insertNodes(supabase, mindmapId, nodes || []);
+  await insertConnections(supabase, mindmapId, connections || []);
 
   return data;
 };
@@ -179,9 +253,7 @@ export const createMindmap = async (
  * List user's mindmaps (excludes soft-deleted)
  */
 export const listMindmaps = async (
-  params: ServiceParams<{
-    since?: string;
-  }>
+  params: ServiceParams<{ since?: string }>
 ): Promise<Mindmap[]> => {
   const { userId, accessToken, since } = params;
   const supabase = createSupabaseClient(accessToken);
@@ -193,7 +265,6 @@ export const listMindmaps = async (
     .is("deleted_at", null)
     .order("updated_at", { ascending: false });
 
-  // Support incremental sync
   if (since) {
     const sinceMs = parseInt(since, 10);
     if (!isNaN(sinceMs) && sinceMs > 0) {
@@ -215,14 +286,11 @@ export const listMindmaps = async (
  * Get mindmap with nodes and connections
  */
 export const getMindmap = async (
-  params: ServiceParams<{
-    mindmapId: string;
-  }>
+  params: ServiceParams<{ mindmapId: string }>
 ): Promise<MindmapWithNodes> => {
   const { userId, accessToken, mindmapId } = params;
   const supabase = createSupabaseClient(accessToken);
 
-  // Get mindmap
   const { data: mindmap, error: mindmapError } = await supabase
     .from("mindmaps")
     .select("*")
@@ -239,7 +307,6 @@ export const getMindmap = async (
     throw new NotFoundError("Mindmap not found");
   }
 
-  // Get nodes (exclude soft-deleted)
   const { data: nodes, error: nodesError } = await supabase
     .from("mindmap_nodes")
     .select("*")
@@ -254,7 +321,6 @@ export const getMindmap = async (
     throw new Error("Failed to retrieve mindmap nodes");
   }
 
-  // Get connections (exclude soft-deleted)
   const { data: connections, error: connError } = await supabase
     .from("connections")
     .select("*")
@@ -277,7 +343,7 @@ export const getMindmap = async (
 };
 
 /**
- * Update mindmap with conflict detection
+ * Update mindmap with conflict detection (upserts if not found)
  */
 export const updateMindmap = async (
   params: ServiceParams<{
@@ -302,7 +368,7 @@ export const updateMindmap = async (
     .eq("owner_id", userId)
     .single();
 
-  // If mindmap not found, upsert it (handles RLS issues and new records)
+  // If mindmap not found, upsert it (handles new records from frontend)
   if (fetchError?.code === "PGRST116" || !current) {
     logger.info({ userId, mindmapId }, "Mindmap not found, upserting");
 
@@ -331,45 +397,9 @@ export const updateMindmap = async (
       throw new Error("Failed to upsert mindmap");
     }
 
-    // Upsert nodes if provided
-    if (updates.nodes && updates.nodes.length > 0) {
-      for (const node of updates.nodes) {
-        await supabase.from("mindmap_nodes").upsert(
-          {
-            id: node.id,
-            mindmap_id: mindmapId,
-            label: node.label,
-            keywords: node.keywords,
-            level: node.level,
-            parent_id: node.parent_id,
-            position_x: node.position_x,
-            position_y: node.position_y,
-            notes: node.notes,
-            version: node.version || 1,
-            updated_at: Date.now(),
-          },
-          { onConflict: "id" }
-        );
-      }
-    }
-
-    // Upsert connections if provided
-    if (updates.connections && updates.connections.length > 0) {
-      for (const conn of updates.connections) {
-        await supabase.from("connections").upsert(
-          {
-            id: conn.id,
-            mindmap_id: mindmapId,
-            from_node_id: conn.from_node_id,
-            to_node_id: conn.to_node_id,
-            relationship: conn.relationship,
-            version: conn.version || 1,
-            updated_at: Date.now(),
-          },
-          { onConflict: "id" }
-        );
-      }
-    }
+    // Upsert nodes and connections using helpers
+    await upsertNodes(supabase, mindmapId, updates.nodes || []);
+    await upsertConnections(supabase, mindmapId, updates.connections || []);
 
     return upserted;
   }
@@ -387,7 +417,9 @@ export const updateMindmap = async (
     updates.expected_version !== undefined &&
     current.version !== updates.expected_version
   ) {
-    const error: any = new Error("Version conflict detected");
+    const error: Error & { status?: number; conflict?: object } = new Error(
+      "Version conflict detected"
+    );
     error.status = 409;
     error.conflict = {
       local_version: updates.expected_version,
@@ -398,7 +430,7 @@ export const updateMindmap = async (
   }
 
   // Prepare update data
-  const updateData: any = { updated_at: Date.now() };
+  const updateData: Record<string, unknown> = { updated_at: Date.now() };
   if (updates.title !== undefined) updateData.title = updates.title;
   if (updates.central_topic !== undefined)
     updateData.central_topic = updates.central_topic;
@@ -418,45 +450,9 @@ export const updateMindmap = async (
     throw new Error("Mindmap update failed");
   }
 
-  // Upsert nodes if provided
-  if (updates.nodes && updates.nodes.length > 0) {
-    for (const node of updates.nodes) {
-      await supabase.from("mindmap_nodes").upsert(
-        {
-          id: node.id,
-          mindmap_id: mindmapId,
-          label: node.label,
-          keywords: node.keywords,
-          level: node.level,
-          parent_id: node.parent_id,
-          position_x: node.position_x,
-          position_y: node.position_y,
-          notes: node.notes,
-          version: node.version || 1,
-          updated_at: Date.now(),
-        },
-        { onConflict: "id" }
-      );
-    }
-  }
-
-  // Upsert connections if provided
-  if (updates.connections && updates.connections.length > 0) {
-    for (const conn of updates.connections) {
-      await supabase.from("connections").upsert(
-        {
-          id: conn.id,
-          mindmap_id: mindmapId,
-          from_node_id: conn.from_node_id,
-          to_node_id: conn.to_node_id,
-          relationship: conn.relationship,
-          version: conn.version || 1,
-          updated_at: Date.now(),
-        },
-        { onConflict: "id" }
-      );
-    }
-  }
+  // Upsert nodes and connections using helpers
+  await upsertNodes(supabase, mindmapId, updates.nodes || []);
+  await upsertConnections(supabase, mindmapId, updates.connections || []);
 
   return data;
 };
@@ -465,15 +461,12 @@ export const updateMindmap = async (
  * Delete mindmap (soft delete)
  */
 export const deleteMindmap = async (
-  params: ServiceParams<{
-    mindmapId: string;
-  }>
+  params: ServiceParams<{ mindmapId: string }>
 ): Promise<void> => {
   const { userId, accessToken, mindmapId } = params;
   const supabase = createSupabaseClient(accessToken);
   const now = Date.now();
 
-  // Soft delete mindmap
   const { error } = await supabase
     .from("mindmaps")
     .update({ deleted_at: now, updated_at: now })
