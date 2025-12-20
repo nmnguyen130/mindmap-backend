@@ -1,51 +1,54 @@
-import { openai, OPENAI_CONFIG } from '@/config/openai';
-import { env } from '@/config/env';
-import { logger } from '@/utils/logger';
+import { openai, OPENAI_CONFIG } from "@/config/openai";
+import { env } from "@/config/env";
+import { logger } from "@/utils/logger";
 
 /**
  * LLM Provider Interface
  */
 export interface LLMProvider {
-    generateCompletion(prompt: string, options?: CompletionOptions): Promise<string>;
+  generateCompletion(
+    prompt: string,
+    options?: CompletionOptions
+  ): Promise<string>;
 }
 
 export interface CompletionOptions {
-    maxTokens?: number;
-    temperature?: number;
-    systemPrompt?: string;
+  maxTokens?: number;
+  temperature?: number;
+  systemPrompt?: string;
 }
 
 /**
  * OpenAI Provider Implementation
  */
 class OpenAIProvider implements LLMProvider {
-    async generateCompletion(
-        prompt: string,
-        options: CompletionOptions = {}
-    ): Promise<string> {
-        const {
-            maxTokens = OPENAI_CONFIG.maxTokens,
-            temperature = OPENAI_CONFIG.temperature,
-            systemPrompt = 'You are a helpful AI assistant.',
-        } = options;
+  async generateCompletion(
+    prompt: string,
+    options: CompletionOptions = {}
+  ): Promise<string> {
+    const {
+      maxTokens = OPENAI_CONFIG.maxTokens,
+      temperature = OPENAI_CONFIG.temperature,
+      systemPrompt = "You are a helpful AI assistant.",
+    } = options;
 
-        try {
-            const response = await openai.chat.completions.create({
-                model: OPENAI_CONFIG.chatModel,
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: prompt },
-                ],
-                max_tokens: maxTokens,
-                temperature,
-            });
+    try {
+      const response = await openai.chat.completions.create({
+        model: OPENAI_CONFIG.chatModel,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: prompt },
+        ],
+        max_tokens: maxTokens,
+        temperature,
+      });
 
-            return response.choices[0]?.message?.content || '';
-        } catch (error) {
-            logger.error({ error }, 'OpenAI completion failed');
-            throw new Error('Failed to generate completion from OpenAI');
-        }
+      return response.choices[0]?.message?.content || "";
+    } catch (error) {
+      logger.error({ error }, "OpenAI completion failed");
+      throw new Error("Failed to generate completion from OpenAI");
     }
+  }
 }
 
 /**
@@ -98,36 +101,39 @@ class OpenAIProvider implements LLMProvider {
  * LLM Service Factory
  */
 class LLMService {
-    private provider: LLMProvider;
+  private provider: LLMProvider;
 
-    constructor() {
-        // For now, default to OpenAI
-        // Future: Check env.AI_PROVIDER to switch between 'openai' and 'ollama'
-        this.provider = new OpenAIProvider();
+  constructor() {
+    // For now, default to OpenAI
+    // Future: Check env.AI_PROVIDER to switch between 'openai' and 'ollama'
+    this.provider = new OpenAIProvider();
 
-        // Example for future Ollama support:
-        // if (env.AI_PROVIDER === 'ollama') {
-        //     this.provider = new OllamaProvider(env.OLLAMA_BASE_URL, env.OLLAMA_MODEL);
-        // } else {
-        //     this.provider = new OpenAIProvider();
-        // }
-    }
+    // Example for future Ollama support:
+    // if (env.AI_PROVIDER === 'ollama') {
+    //     this.provider = new OllamaProvider(env.OLLAMA_BASE_URL, env.OLLAMA_MODEL);
+    // } else {
+    //     this.provider = new OpenAIProvider();
+    // }
+  }
 
-    /**
-     * Generate text completion
-     */
-    async generateCompletion(
-        prompt: string,
-        options?: CompletionOptions
-    ): Promise<string> {
-        return this.provider.generateCompletion(prompt, options);
-    }
+  /**
+   * Generate text completion
+   */
+  async generateCompletion(
+    prompt: string,
+    options?: CompletionOptions
+  ): Promise<string> {
+    return this.provider.generateCompletion(prompt, options);
+  }
 
-    /**
-     * Analyze PDF content and generate mindmap structure
-     */
-    async analyzePdfForMindmap(content: string, fileName?: string): Promise<MindmapAnalysis> {
-        const systemPrompt = `You are an expert at analyzing documents and creating structured mindmaps. 
+  /**
+   * Analyze PDF content and generate mindmap structure
+   */
+  async analyzePdfForMindmap(
+    content: string,
+    fileName?: string
+  ): Promise<MindmapAnalysis> {
+    const systemPrompt = `You are an expert at analyzing documents and creating structured mindmaps. 
 Your task is to analyze the provided document content and extract:
 1. A central topic (main theme of the document)
 2. Key topics organized hierarchically
@@ -166,63 +172,82 @@ Rules:
 - Use meaningful relationship labels (describes, contains, explains, etc.)
 - Return ONLY valid JSON, no markdown or extra text`;
 
-        const userPrompt = `Analyze this document${fileName ? ` titled "${fileName}"` : ''} and create a mindmap:
+    const userPrompt = `Analyze this document${
+      fileName ? ` titled "${fileName}"` : ""
+    } and create a mindmap:
 
-${content.slice(0, 15000)}${content.length > 15000 ? '\n\n[Content truncated for analysis]' : ''}
+${content.slice(0, 15000)}${
+      content.length > 15000 ? "\n\n[Content truncated for analysis]" : ""
+    }
 
 Remember: Return ONLY the JSON object, nothing else.`;
 
-        try {
-            const response = await this.generateCompletion(userPrompt, {
-                systemPrompt,
-                maxTokens: 3000,
-                temperature: 0.7,
-            });
+    try {
+      const response = await this.generateCompletion(userPrompt, {
+        systemPrompt,
+        maxTokens: 3000,
+        temperature: 0.7,
+      });
 
-            // Extract JSON from response (in case LLM adds markdown)
-            const jsonMatch = response.match(/\{[\s\S]*\}/);
-            if (!jsonMatch) {
-                throw new Error('No valid JSON found in LLM response');
-            }
-
-            const analysis = JSON.parse(jsonMatch[0]) as MindmapAnalysis;
-
-            // Validate structure
-            if (!analysis.nodes || !Array.isArray(analysis.nodes)) {
-                throw new Error('Invalid mindmap structure: missing nodes array');
-            }
-
-            return analysis;
-        } catch (error) {
-            logger.error({ error }, 'Failed to analyze PDF for mindmap');
-            throw new Error('Failed to generate mindmap from document');
+      // Extract JSON from response (handle markdown code blocks)
+      let jsonStr = response;
+      const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (codeBlockMatch?.[1]) {
+        jsonStr = codeBlockMatch[1].trim();
+      } else {
+        const jsonMatch = response.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          jsonStr = jsonMatch[0];
         }
+      }
+
+      if (!jsonStr.startsWith("{")) {
+        throw new Error("No valid JSON found in LLM response");
+      }
+
+      const analysis = JSON.parse(jsonStr) as MindmapAnalysis;
+
+      // Validate and normalize structure
+      if (!analysis.nodes || !Array.isArray(analysis.nodes)) {
+        throw new Error("Invalid mindmap structure: missing nodes array");
+      }
+
+      // Ensure edges array exists (LLM may omit it)
+      if (!analysis.edges) {
+        analysis.edges = [];
+      }
+
+      return analysis;
+    } catch (error) {
+      logger.error({ error }, "Failed to analyze PDF for mindmap");
+      throw new Error("Failed to generate mindmap from document");
     }
+  }
 }
 
 /**
  * Mindmap Analysis Result Interface
  */
 export interface MindmapNode {
-    id: string;
-    label: string;
-    keywords: string[];
-    level: number;
-    parent_id: string | null;
+  id: string;
+  label: string;
+  keywords: string[];
+  level: number;
+  parent_id: string | null;
 }
 
 export interface MindmapEdge {
-    from: string;
-    to: string;
-    relationship?: string;
+  from: string;
+  to: string;
+  relationship?: string;
 }
 
 export interface MindmapAnalysis {
-    title: string;
-    central_topic: string;
-    summary?: string;
-    nodes: MindmapNode[];
-    edges: MindmapEdge[];
+  title: string;
+  central_topic: string;
+  summary?: string;
+  nodes: MindmapNode[];
+  edges: MindmapEdge[];
 }
 
 // Export singleton instance

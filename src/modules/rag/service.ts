@@ -1,8 +1,15 @@
 import pdfParse from "pdf-parse-new";
 import { createSupabaseClient } from "@/config/supabase";
+import { openai, OPENAI_CONFIG } from "@/config/openai";
 import { EmbeddingService } from "@/services/embedding.service";
 import * as storageService from "@/services/storage.service";
-import { openai, OPENAI_CONFIG } from "@/config/openai";
+import { llmService, MindmapAnalysis } from "@/services/llm.service";
+import {
+  createMindmap,
+  Mindmap,
+  NodeInput,
+  ConnectionInput,
+} from "@/modules/mindmaps/service";
 import { NotFoundError, ValidationError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import { splitIntoSections, generateEmbeddings } from "./helpers";
@@ -12,8 +19,8 @@ export interface DocumentSection {
   document_id: string;
   content: string;
   embedding: number[] | null;
-  metadata: Record<string, any>;
-  created_at: number; // Unix milliseconds
+  metadata: Record<string, unknown>;
+  created_at: number;
 }
 
 export interface Document {
@@ -21,17 +28,45 @@ export interface Document {
   name: string;
   storage_object_id: string;
   created_by: string;
-  created_at: number; // Unix milliseconds
+  created_at: number;
 }
 
-type ServiceParams<T = {}> = {
+interface MindmapResult {
+  id: string;
+  title: string;
+  mindmap_data: {
+    central_topic: string;
+    summary?: string;
+    nodes: Array<{
+      id: string;
+      label: string;
+      keywords: string[];
+      level: number;
+      parent_id: string | null;
+    }>;
+    edges: Array<{
+      id: string;
+      from: string;
+      to: string;
+      relationship?: string;
+    }>;
+  };
+}
+
+interface CreateDocumentResult {
+  document: Document;
+  sections_count: number;
+  mindmap?: MindmapResult;
+}
+
+type ServiceParams<T = object> = {
   userId: string;
   accessToken: string;
 } & T;
 
 /**
- * Create document from PDF - Complete workflow
- * Upload PDF → Create document → Process and generate embeddings → Optionally generate mindmap
+ * Create document from PDF with optional mindmap generation.
+ * Workflow: Parse PDF → Upload to storage → Create document → Generate embeddings → Create mindmap
  */
 export const createDocumentFromPdf = async (
   params: ServiceParams<{
@@ -40,19 +75,7 @@ export const createDocumentFromPdf = async (
     title?: string;
     generateMindmap?: boolean;
   }>
-): Promise<{
-  id: string;
-  name: string;
-  storage_object_id: string;
-  sections_created: number;
-  created_at: number; // Unix milliseconds
-  mindmap?: {
-    id: string;
-    title: string;
-    mindmap_data: any;
-    nodes_count: number;
-  };
-}> => {
+): Promise<CreateDocumentResult> => {
   const {
     userId,
     accessToken,
@@ -69,148 +92,189 @@ export const createDocumentFromPdf = async (
   }
 
   try {
+    const startTime = Date.now();
     logger.info({ userId, fileName, generateMindmap }, "Processing PDF upload");
 
-    // Step 1: Parse PDF to extract text
+    // Step 1: Parse PDF (must be first - we need pdfText)
     const pdfData = await pdfParse(fileBuffer);
-    const text = pdfData.text.trim();
+    const pdfText = pdfData.text.trim();
 
-    if (!text) {
+    if (!pdfText) {
       throw new ValidationError("PDF contains no extractable text");
     }
 
-    // Step 2: Upload file to Supabase Storage
-    const {
-      id: storageId,
-      path: storagePath,
-      file_size: fileSize,
-    } = await storageService.uploadFile(
-      userId,
-      fileBuffer,
-      fileName,
-      "application/pdf"
+    // Step 2: PARALLEL - Upload storage + LLM analysis (if needed)
+    // These operations are independent and can run simultaneously
+    const documentName = title || fileName;
+
+    const [storageResult, llmAnalysis] = await Promise.all([
+      // Upload to storage
+      storageService.uploadFile(
+        userId,
+        fileBuffer,
+        fileName,
+        "application/pdf"
+      ),
+      // Start LLM analysis early (it's the slowest operation)
+      generateMindmap
+        ? llmService.analyzePdfForMindmap(pdfText, fileName)
+        : Promise.resolve(null),
+    ]);
+
+    logger.debug(
+      { durationMs: Date.now() - startTime },
+      "Parallel upload + LLM complete"
     );
 
     // Step 3: Create document record
-    const documentName = title || fileName;
     const { data: document, error: docError } = await supabase
       .from("documents")
       .insert({
         name: documentName,
-        storage_object_id: storageId,
+        storage_object_id: storageResult.id,
         created_by: userId,
       })
       .select()
       .single();
 
     if (docError || !document) {
-      logger.error({ docError, userId }, "Failed to create document record");
+      logger.error({ docError, userId }, "Failed to create document");
       throw new Error(`Failed to create document: ${docError?.message}`);
     }
 
-    // Step 4: Split text into sections
-    const sections = splitIntoSections(text);
-    logger.info(
-      { documentId: document.id, sectionCount: sections.length },
-      "Text split into sections"
-    );
+    // Step 4: Split and insert sections
+    const textSections = splitIntoSections(pdfText);
+    const sectionRows = textSections.map((content, idx) => ({
+      document_id: document.id,
+      content,
+      metadata: {
+        source: fileName,
+        page_count: pdfData.numpages,
+        section_index: idx,
+      },
+    }));
 
-    // Step 5: Insert document sections
     const { data: insertedSections, error: sectionsError } = await supabase
       .from("document_sections")
-      .insert(
-        sections.map((content, index) => ({
-          document_id: document.id,
-          content,
-          metadata: {
-            source: fileName,
-            page_count: pdfData.numpages,
-            section_index: index,
-          },
-        }))
-      )
+      .insert(sectionRows)
       .select("id");
 
     if (sectionsError || !insertedSections) {
-      logger.error(
-        { sectionsError, documentId: document.id },
-        "Failed to insert sections"
-      );
-      throw new Error(
-        `Failed to create document sections: ${sectionsError?.message}`
-      );
+      throw new Error(`Failed to create sections: ${sectionsError?.message}`);
     }
 
-    // Step 6: Generate embeddings asynchronously (background task)
+    // Step 5: Generate embeddings in background (non-blocking)
     generateEmbeddings({
       userId,
       accessToken,
       sectionIds: insertedSections.map((s) => s.id),
-    }).catch((err) => {
-      logger.error(
-        { err, documentId: document.id },
-        "Failed to generate embeddings"
-      );
-    });
+    }).catch((err) =>
+      logger.error({ err, documentId: document.id }, "Embedding failed")
+    );
 
-    const result: any = {
-      id: document.id,
-      name: document.name,
-      storage_object_id: document.storage_object_id,
-      sections_created: insertedSections.length,
-      created_at: document.created_at,
+    const result: CreateDocumentResult = {
+      document: document as Document,
+      sections_count: insertedSections.length,
     };
 
-    // Step 7 (Optional): Generate mindmap structure using LLM
-    if (generateMindmap) {
-      // Import llmService lazily to avoid circular dependencies
-      const { llmService } = await import("@/services/llm.service");
-
-      const mindmapData = await llmService.analyzePdfForMindmap(text, fileName);
-      logger.info(
-        { nodes: mindmapData.nodes.length },
-        "Mindmap structure generated"
-      );
-
-      // Step 8: Create mindmap record
-      const { data: mindmap, error: mindmapError } = await supabase
-        .from("mindmaps")
-        .insert({
-          owner_id: userId,
-          title: title || mindmapData.title,
-          source_document_id: document.id,
-          mindmap_data: mindmapData,
-        })
-        .select()
-        .single();
-
-      if (mindmapError || !mindmap) {
-        logger.error({ mindmapError }, "Failed to create mindmap");
-        throw new Error(`Failed to create mindmap: ${mindmapError?.message}`);
-      }
-
-      logger.info(
-        { mindmapId: mindmap.id, documentId: document.id },
-        "Mindmap created successfully"
-      );
-
-      result.mindmap = {
-        id: mindmap.id,
-        title: mindmap.title,
-        mindmap_data: mindmapData,
-        nodes_count: mindmapData.nodes.length,
-      };
+    // Step 6: Create mindmap from pre-computed LLM analysis
+    if (generateMindmap && llmAnalysis) {
+      result.mindmap = await createMindmapFromAnalysis({
+        userId,
+        accessToken,
+        documentId: document.id,
+        analysis: llmAnalysis,
+        title,
+      });
     }
+
+    const totalDuration = Date.now() - startTime;
+    logger.info(
+      { totalDurationMs: totalDuration, documentId: document.id },
+      "PDF processing complete"
+    );
 
     return result;
   } catch (error) {
-    if (error instanceof ValidationError) {
-      throw error;
-    }
-    logger.error({ error, userId, fileName }, "PDF upload workflow failed");
+    if (error instanceof ValidationError) throw error;
+    logger.error({ error, userId, fileName }, "PDF upload failed");
     throw new Error("Failed to process PDF");
   }
 };
+
+/**
+ * Create mindmap from pre-computed LLM analysis (decoupled from LLM call for parallel execution).
+ */
+async function createMindmapFromAnalysis(params: {
+  userId: string;
+  accessToken: string;
+  documentId: string;
+  analysis: MindmapAnalysis;
+  title?: string;
+}): Promise<MindmapResult> {
+  const { userId, accessToken, documentId, analysis, title } = params;
+
+  // Create ID mapping: LLM node ID → real UUID
+  const idMap = new Map<string, string>();
+  for (const node of analysis.nodes) {
+    idMap.set(node.id, crypto.randomUUID());
+  }
+
+  // Transform nodes for database (NodeInput) and response (mindmap_data.nodes)
+  const mappedNodes = analysis.nodes.map((node) => ({
+    id: idMap.get(node.id)!,
+    label: node.label,
+    keywords: node.keywords || [],
+    level: node.level,
+    parent_id: node.parent_id ? idMap.get(node.parent_id) ?? null : null,
+  }));
+
+  // Transform edges for database (ConnectionInput) and response (mindmap_data.edges)
+  const mappedEdges = (analysis.edges || [])
+    .filter((edge) => idMap.has(edge.from) && idMap.has(edge.to))
+    .map((edge) => ({
+      id: crypto.randomUUID(),
+      from: idMap.get(edge.from)!,
+      to: idMap.get(edge.to)!,
+      relationship: edge.relationship,
+    }));
+
+  // Insert to database via createMindmap service
+  const mindmap = await createMindmap({
+    userId,
+    accessToken,
+    title: title || analysis.title,
+    central_topic: analysis.central_topic,
+    summary: analysis.summary,
+    document_id: documentId,
+    nodes: mappedNodes.map((n) => ({
+      ...n,
+      keywords: JSON.stringify(n.keywords),
+      position_x: 0,
+      position_y: 0,
+      notes: null,
+    })),
+    connections: mappedEdges.map((e) => ({
+      id: e.id,
+      from_node_id: e.from,
+      to_node_id: e.to,
+      relationship: e.relationship ?? null,
+    })),
+  });
+
+  logger.info({ mindmapId: mindmap.id, documentId }, "Mindmap created");
+
+  return {
+    id: mindmap.id,
+    title: mindmap.title,
+    mindmap_data: {
+      central_topic: analysis.central_topic,
+      summary: analysis.summary,
+      nodes: mappedNodes,
+      edges: mappedEdges,
+    },
+  };
+}
 
 /**
  * Chat with RAG context (streaming)
