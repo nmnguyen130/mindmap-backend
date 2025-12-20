@@ -22,7 +22,7 @@ export interface MindmapNode {
   id: string;
   mindmap_id: string;
   label: string;
-  keywords: string | null;
+  keywords: string[] | null;
   level: number;
   parent_id: string | null;
   position_x: number;
@@ -54,7 +54,7 @@ export interface MindmapWithNodes extends Mindmap {
 export interface NodeInput {
   id: string;
   label: string;
-  keywords: string | null;
+  keywords: string[] | null;
   level: number;
   parent_id: string | null;
   position_x: number;

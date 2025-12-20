@@ -3,7 +3,7 @@ import { createSupabaseClient } from "@/config/supabase";
 import { openai, OPENAI_CONFIG } from "@/config/openai";
 import { EmbeddingService } from "@/services/embedding.service";
 import * as storageService from "@/services/storage.service";
-import { llmService, MindmapAnalysis } from "@/services/llm.service";
+import { llmService } from "@/services/llm.service";
 import {
   createMindmap,
   Mindmap,
@@ -92,10 +92,9 @@ export const createDocumentFromPdf = async (
   }
 
   try {
-    const startTime = Date.now();
     logger.info({ userId, fileName, generateMindmap }, "Processing PDF upload");
 
-    // Step 1: Parse PDF (must be first - we need pdfText)
+    // Step 1: Parse PDF
     const pdfData = await pdfParse(fileBuffer);
     const pdfText = pdfData.text.trim();
 
@@ -103,35 +102,21 @@ export const createDocumentFromPdf = async (
       throw new ValidationError("PDF contains no extractable text");
     }
 
-    // Step 2: PARALLEL - Upload storage + LLM analysis (if needed)
-    // These operations are independent and can run simultaneously
-    const documentName = title || fileName;
-
-    const [storageResult, llmAnalysis] = await Promise.all([
-      // Upload to storage
-      storageService.uploadFile(
-        userId,
-        fileBuffer,
-        fileName,
-        "application/pdf"
-      ),
-      // Start LLM analysis early (it's the slowest operation)
-      generateMindmap
-        ? llmService.analyzePdfForMindmap(pdfText, fileName)
-        : Promise.resolve(null),
-    ]);
-
-    logger.debug(
-      { durationMs: Date.now() - startTime },
-      "Parallel upload + LLM complete"
+    // Step 2: Upload to storage
+    const { id: storageId } = await storageService.uploadFile(
+      userId,
+      fileBuffer,
+      fileName,
+      "application/pdf"
     );
 
     // Step 3: Create document record
+    const documentName = title || fileName;
     const { data: document, error: docError } = await supabase
       .from("documents")
       .insert({
         name: documentName,
-        storage_object_id: storageResult.id,
+        storage_object_id: storageId,
         created_by: userId,
       })
       .select()
@@ -163,13 +148,16 @@ export const createDocumentFromPdf = async (
       throw new Error(`Failed to create sections: ${sectionsError?.message}`);
     }
 
-    // Step 5: Generate embeddings in background (non-blocking)
+    // Step 5: Generate embeddings in background
     generateEmbeddings({
       userId,
       accessToken,
       sectionIds: insertedSections.map((s) => s.id),
     }).catch((err) =>
-      logger.error({ err, documentId: document.id }, "Embedding failed")
+      logger.error(
+        { err, documentId: document.id },
+        "Embedding generation failed"
+      )
     );
 
     const result: CreateDocumentResult = {
@@ -177,22 +165,17 @@ export const createDocumentFromPdf = async (
       sections_count: insertedSections.length,
     };
 
-    // Step 6: Create mindmap from pre-computed LLM analysis
-    if (generateMindmap && llmAnalysis) {
-      result.mindmap = await createMindmapFromAnalysis({
+    // Step 6: Generate mindmap if requested
+    if (generateMindmap) {
+      result.mindmap = await createMindmapFromPdf({
         userId,
         accessToken,
         documentId: document.id,
-        analysis: llmAnalysis,
+        pdfText,
+        fileName,
         title,
       });
     }
-
-    const totalDuration = Date.now() - startTime;
-    logger.info(
-      { totalDurationMs: totalDuration, documentId: document.id },
-      "PDF processing complete"
-    );
 
     return result;
   } catch (error) {
@@ -203,16 +186,21 @@ export const createDocumentFromPdf = async (
 };
 
 /**
- * Create mindmap from pre-computed LLM analysis (decoupled from LLM call for parallel execution).
+ * Create mindmap from PDF text using LLM analysis and mindmaps service.
  */
-async function createMindmapFromAnalysis(params: {
+async function createMindmapFromPdf(params: {
   userId: string;
   accessToken: string;
   documentId: string;
-  analysis: MindmapAnalysis;
+  pdfText: string;
+  fileName: string;
   title?: string;
 }): Promise<MindmapResult> {
-  const { userId, accessToken, documentId, analysis, title } = params;
+  const { userId, accessToken, documentId, pdfText, fileName, title } = params;
+
+  // Analyze document with LLM
+  const analysis = await llmService.analyzePdfForMindmap(pdfText, fileName);
+  logger.info({ nodeCount: analysis.nodes.length }, "LLM analysis complete");
 
   // Create ID mapping: LLM node ID → real UUID
   const idMap = new Map<string, string>();
@@ -221,13 +209,19 @@ async function createMindmapFromAnalysis(params: {
   }
 
   // Transform nodes for database (NodeInput) and response (mindmap_data.nodes)
-  const mappedNodes = analysis.nodes.map((node) => ({
-    id: idMap.get(node.id)!,
-    label: node.label,
-    keywords: node.keywords || [],
-    level: node.level,
-    parent_id: node.parent_id ? idMap.get(node.parent_id) ?? null : null,
-  }));
+  const mappedNodes = analysis.nodes.map((node) => {
+    const mappedId = idMap.get(node.id)!;
+    const mappedParentId = node.parent_id
+      ? idMap.get(node.parent_id) || null
+      : null;
+    return {
+      id: mappedId,
+      label: node.label,
+      keywords: node.keywords || [],
+      level: node.level,
+      parent_id: mappedParentId,
+    };
+  });
 
   // Transform edges for database (ConnectionInput) and response (mindmap_data.edges)
   const mappedEdges = (analysis.edges || [])
@@ -236,10 +230,29 @@ async function createMindmapFromAnalysis(params: {
       id: crypto.randomUUID(),
       from: idMap.get(edge.from)!,
       to: idMap.get(edge.to)!,
-      relationship: edge.relationship,
+      relationship: edge.relationship || undefined,
     }));
 
-  // Insert to database via createMindmap service
+  // Convert to service input format
+  const nodesInput: NodeInput[] = mappedNodes.map((n) => ({
+    id: n.id,
+    label: n.label,
+    keywords: n.keywords,
+    level: n.level,
+    parent_id: n.parent_id,
+    position_x: 0,
+    position_y: 0,
+    notes: null,
+  }));
+
+  const connectionsInput: ConnectionInput[] = mappedEdges.map((e) => ({
+    id: e.id,
+    from_node_id: e.from,
+    to_node_id: e.to,
+    relationship: e.relationship ?? null,
+  }));
+
+  // Use createMindmap service (DRY)
   const mindmap = await createMindmap({
     userId,
     accessToken,
@@ -247,23 +260,13 @@ async function createMindmapFromAnalysis(params: {
     central_topic: analysis.central_topic,
     summary: analysis.summary,
     document_id: documentId,
-    nodes: mappedNodes.map((n) => ({
-      ...n,
-      keywords: JSON.stringify(n.keywords),
-      position_x: 0,
-      position_y: 0,
-      notes: null,
-    })),
-    connections: mappedEdges.map((e) => ({
-      id: e.id,
-      from_node_id: e.from,
-      to_node_id: e.to,
-      relationship: e.relationship ?? null,
-    })),
+    nodes: nodesInput,
+    connections: connectionsInput,
   });
 
   logger.info({ mindmapId: mindmap.id, documentId }, "Mindmap created");
 
+  // Return format that frontend expects (reuse already-mapped data)
   return {
     id: mindmap.id,
     title: mindmap.title,

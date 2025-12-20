@@ -30,7 +30,7 @@ create table public.mindmap_nodes (
   id text primary key,
   mindmap_id text not null references public.mindmaps(id) on delete cascade,
   label text not null default '',
-  keywords text,  -- JSON array stored as text
+  keywords jsonb,  -- JSON array stored
   level integer not null default 0 check (level >= 0),
   parent_id text,  -- Parent node for hierarchy
   position_x real not null default 0,

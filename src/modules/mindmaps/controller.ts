@@ -11,7 +11,7 @@ const transformNodes = (nodes?: CreateMindmapInput["nodes"]) => {
   return nodes.map((n) => ({
     id: n.id,
     label: n.label,
-    keywords: n.keywords ? JSON.stringify(n.keywords) : null,
+    keywords: n.keywords ?? null,
     level: n.level ?? 0,
     parent_id: n.parent_id ?? null,
     position_x: n.position?.x ?? 0,
@@ -28,8 +28,8 @@ const transformConnections = (
   if (!connections) return undefined;
   return connections.map((c) => ({
     id: c.id,
-    from_node_id: c.from,
-    to_node_id: c.to,
+    from_node_id: c.from_node_id,
+    to_node_id: c.to_node_id,
     relationship: c.relationship ?? null,
     version: c.version ?? 1,
   }));

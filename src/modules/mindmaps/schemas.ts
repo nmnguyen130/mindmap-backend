@@ -15,8 +15,8 @@ const nodeSchema = z.object({
 // Connection schema for sync
 const connectionSchema = z.object({
   id: z.string(),
-  from: z.string(),
-  to: z.string(),
+  from_node_id: z.string(),
+  to_node_id: z.string(),
   relationship: z.string().nullable().optional(),
   version: z.number().int().optional(),
 });
